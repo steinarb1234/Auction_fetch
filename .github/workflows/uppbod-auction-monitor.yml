@@ -1,0 +1,45 @@
+name: Uppboð auction change monitor
+
+on:
+  schedule:
+    # Reykjavík stays on UTC year-round. The offset avoids the busiest minute
+    # at the top of the hour, when scheduled GitHub Actions can be delayed.
+    - cron: '7,22,37,52 * * * *'
+      timezone: 'Atlantic/Reykjavik'
+  workflow_dispatch:
+
+concurrency:
+  group: uppbod-auction-monitor
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report-auction-changes:
+    name: Fetch and report auction changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22.22.3'
+          package-manager-cache: false
+
+      - name: Monitor Uppboð auctions
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional overrides:
+          # AUCTION_ENDPOINT: https://island.is/api/graphql
+          # REPORT_REPOSITORY: owner/repository
+          # MAX_REPORT_ROWS: '150'
+          # MAX_CHANGE_ITEMS: '50'
+        run: node scripts/uppbod-auction-monitor.mjs
