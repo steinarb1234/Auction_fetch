@@ -6,6 +6,7 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 export const AUCTION_ENDPOINT = 'https://island.is/api/graphql'
 export const ISSUE_TITLE = 'Uppboð auction monitor'
 export const ISSUE_LABEL = 'uppbod-auction-monitor'
+export const TRACKED_AUCTION_TYPES = ['Framhald uppboðs', 'Sölu lokið']
 
 export const AUCTION_FIELDS = [
   'office',
@@ -71,10 +72,10 @@ const GRAPHQL_QUERY = `
   }
 `
 
-const SNAPSHOT_MARKER_NAME = 'UPPBOD_AUCTION_SNAPSHOT_V1'
-const SNAPSHOT_MARKER_PATTERN = new RegExp(
-  `<!-- ${SNAPSHOT_MARKER_NAME}:([A-Za-z0-9+/=]+) -->`,
-)
+const SNAPSHOT_VERSION = 2
+const SNAPSHOT_MARKER_NAME = 'UPPBOD_AUCTION_SNAPSHOT_V2'
+const SNAPSHOT_MARKER_PATTERN =
+  /<!-- UPPBOD_AUCTION_SNAPSHOT_V(?:1|2):([A-Za-z0-9+/=]+) -->/
 const MAX_ISSUE_BODY_BYTES = 64_000
 const DEFAULT_MAX_REPORT_ROWS = 150
 const DEFAULT_MAX_CHANGE_ITEMS = 50
@@ -92,6 +93,21 @@ function cleanValue(value) {
   return String(value ?? '')
     .replace(/\r\n/g, '\n')
     .trim()
+}
+
+function auctionTypeKey(value) {
+  return cleanValue(value)
+    .normalize('NFKC')
+    .replace(/\s+/g, ' ')
+    .toLocaleLowerCase('is')
+}
+
+const TRACKED_AUCTION_TYPE_KEYS = new Set(
+  TRACKED_AUCTION_TYPES.map(auctionTypeKey),
+)
+
+export function isTrackedAuctionType(value) {
+  return TRACKED_AUCTION_TYPE_KEYS.has(auctionTypeKey(value))
 }
 
 function shortHash(value) {
@@ -113,7 +129,6 @@ function fallbackIdentity(auction) {
     auction.lotName,
     auction.lotType,
     auction.location,
-    auction.auctionType,
   ].join('\u001f')
 }
 
@@ -173,7 +188,9 @@ export function buildSnapshot(rawAuctions, generatedAt = new Date().toISOString(
     throw new TypeError('Auction data must be an array')
   }
 
-  const normalizedAuctions = rawAuctions.map(normalizeAuction)
+  const normalizedAuctions = rawAuctions
+    .map(normalizeAuction)
+    .filter((auction) => isTrackedAuctionType(auction.auctionType))
   const groups = new Map()
 
   for (const auction of normalizedAuctions) {
@@ -208,10 +225,28 @@ export function buildSnapshot(rawAuctions, generatedAt = new Date().toISOString(
   )
 
   return {
-    version: 1,
+    version: SNAPSHOT_VERSION,
     generatedAt,
+    filters: {
+      auctionTypes: [...TRACKED_AUCTION_TYPES],
+    },
     auctions: snapshotAuctions,
   }
+}
+
+function snapshotUsesCurrentAuctionTypeFilter(snapshot) {
+  const configuredTypes = snapshot?.filters?.auctionTypes
+  if (snapshot?.version !== SNAPSHOT_VERSION || !Array.isArray(configuredTypes)) {
+    return false
+  }
+
+  const configuredKeys = [...new Set(configuredTypes.map(auctionTypeKey))].sort()
+  const trackedKeys = [...TRACKED_AUCTION_TYPE_KEYS].sort()
+
+  return (
+    configuredKeys.length === trackedKeys.length &&
+    configuredKeys.every((value, index) => value === trackedKeys[index])
+  )
 }
 
 export function diffSnapshots(previousSnapshot, currentSnapshot) {
@@ -295,7 +330,7 @@ export function decodeSnapshotFromIssueBody(issueBody) {
     )
 
     if (
-      snapshot?.version !== 1 ||
+      ![1, SNAPSHOT_VERSION].includes(snapshot?.version) ||
       !Array.isArray(snapshot.auctions) ||
       typeof snapshot.generatedAt !== 'string'
     ) {
@@ -337,6 +372,9 @@ function describeAuction(snapshotAuction) {
   const auction = snapshotAuction.display ?? {}
   const name = escapeInline(auction.lotName || 'Unnamed auction')
   const id = escapeInline(auction.lotId || 'no lot ID')
+  const auctionType = auction.auctionType
+    ? `Type: ${escapeInline(auction.auctionType)}`
+    : null
   const dateTime = [auction.auctionDate, auction.auctionTime]
     .filter(Boolean)
     .join(' ')
@@ -344,6 +382,7 @@ function describeAuction(snapshotAuction) {
 
   return [
     `**${name}** (${id})`,
+    auctionType,
     dateTime ? escapeInline(dateTime) : null,
     location ? escapeInline(location) : null,
   ]
@@ -389,7 +428,7 @@ export function renderChangeComment(
     return `- ${describeAuction(current)}\n  - ${details}`
   })
 
-  addSection('Removed', diff.removed, (auction) =>
+  addSection('Removed or left tracked types', diff.removed, (auction) =>
     `- ${describeAuction(auction)}`,
   )
 
@@ -406,7 +445,8 @@ export function renderIssueBody(
       display.auctionDate,
       display.auctionTime,
       display.lotName,
-      display.lotType || display.auctionType,
+      display.auctionType,
+      display.lotType,
       display.auctionTakesPlaceAt || display.location,
       display.lotId,
     ]
@@ -418,15 +458,16 @@ export function renderIssueBody(
   const lines = [
     '# Uppboð — current auction report',
     '',
-    'This issue is maintained automatically. The body is refreshed and a comment is added only when the auction feed changes.',
+    'This issue is maintained automatically. It tracks only auctions whose auction type is `Framhald uppboðs` or `Sölu lokið`.',
     '',
     `- **Last detected change:** ${snapshot.generatedAt}`,
-    `- **Current auctions:** ${snapshot.auctions.length}`,
+    `- **Current tracked auctions:** ${snapshot.auctions.length}`,
+    `- **Tracked auction types:** ${TRACKED_AUCTION_TYPES.map((type) => `\`${type}\``).join(' and ')}`,
     `- **Latest change:** ${changeSummary}`,
     '- **Polling schedule:** every 15 minutes, at 07, 22, 37, and 52 minutes past the hour in `Atlantic/Reykjavik`.',
     '',
-    '| Date | Time | Auction | Type | Location | Lot ID |',
-    '|---|---|---|---|---|---|',
+    '| Date | Time | Auction | Auction type | Lot type | Location | Lot ID |',
+    '|---|---|---|---|---|---|---|',
     ...rows.map((row) => `| ${row} |`),
   ]
 
@@ -716,7 +757,7 @@ export async function runMonitor({
     }
 
     await writeStepSummary(
-      `## Uppboð auction monitor\n\nBaseline created with **${result.auctionCount}** auctions.\n\n${result.issueUrl}`,
+      `## Uppboð auction monitor\n\nBaseline created with **${result.auctionCount}** tracked auctions.\n\n${result.issueUrl}`,
     )
     return result
   }
@@ -733,7 +774,7 @@ export async function runMonitor({
     await addMonitorComment(
       github,
       issue.number,
-      `## Auction monitor baseline reset — ${currentSnapshot.generatedAt}\n\nThe issue did not contain a readable previous snapshot, so the current ${currentSnapshot.auctions.length} auctions were saved as the new baseline.`,
+      `## Auction monitor baseline reset — ${currentSnapshot.generatedAt}\n\nThe issue did not contain a readable previous snapshot, so the current ${currentSnapshot.auctions.length} tracked auctions were saved as the new baseline.`,
     )
 
     const result = {
@@ -743,7 +784,27 @@ export async function runMonitor({
       auctionCount: currentSnapshot.auctions.length,
     }
     await writeStepSummary(
-      `## Uppboð auction monitor\n\nBaseline reset with **${result.auctionCount}** auctions.\n\n${result.issueUrl}`,
+      `## Uppboð auction monitor\n\nBaseline reset with **${result.auctionCount}** tracked auctions.\n\n${result.issueUrl}`,
+    )
+    return result
+  }
+
+  if (!snapshotUsesCurrentAuctionTypeFilter(previousSnapshot)) {
+    const body = renderIssueBody(
+      currentSnapshot,
+      'Baseline migrated to track only Framhald uppboðs and Sölu lokið',
+      Number(env.MAX_REPORT_ROWS) || DEFAULT_MAX_REPORT_ROWS,
+    )
+    await updateMonitorIssue(github, issue.number, body)
+
+    const result = {
+      status: 'baseline-migrated',
+      issueNumber: issue.number,
+      issueUrl: issue.html_url,
+      auctionCount: currentSnapshot.auctions.length,
+    }
+    await writeStepSummary(
+      `## Uppboð auction monitor\n\nBaseline migrated without an auction-change notification. Tracking **${result.auctionCount}** auctions of type **Framhald uppboðs** or **Sölu lokið**.\n\n${result.issueUrl}`,
     )
     return result
   }
@@ -759,7 +820,7 @@ export async function runMonitor({
       diff,
     }
     await writeStepSummary(
-      `## Uppboð auction monitor\n\nNo auction changes detected. Current count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
+      `## Uppboð auction monitor\n\nNo tracked auction changes detected. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
     )
     return result
   }
@@ -788,7 +849,7 @@ export async function runMonitor({
     diff,
   }
   await writeStepSummary(
-    `## Uppboð auction monitor\n\nDetected **${summary}**. Current count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
+    `## Uppboð auction monitor\n\nDetected **${summary}** among tracked auctions. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
   )
   return result
 }
