@@ -2,27 +2,23 @@
 
 This bundle adds a scheduled GitHub Action that fetches `getSyslumennAuctions` from the public Ísland.is GraphQL endpoint and reports changes in one GitHub issue.
 
-It tracks only auctions whose `auctionType` is:
-
-- `Framhald uppboðs`
-- `Sölu lokið`
-
-Type matching is case-insensitive and ignores repeated surrounding whitespace.
-
 ## Behavior
 
 - Runs every 15 minutes at `:07`, `:22`, `:37`, and `:52` in `Atlantic/Reykjavik`.
 - Can also be started manually with **Actions → Uppboð auction change monitor → Run workflow**.
 - Creates one issue named **Uppboð auction monitor** on its first run.
-- Updates the issue body with the current filtered auction table when data changes.
-- Shows **auction type** and **lot type** in separate report columns.
-- Adds a change comment showing added, changed, and removed auctions, with the auction type included on every auction line.
-- Treats a change between `Framhald uppboðs` and `Sölu lokið` as a changed auction and shows the old and new type.
-- Treats an auction entering the tracked types as added, and an auction leaving the tracked types as removed.
-- Does nothing to the issue when the feed is unchanged.
+- Tracks only `Framhald uppboðs` and `Sölu lokið` listings.
+- Reports auction-type transitions and true removals from the source feed.
+- Updates the issue body with the current filtered auction table when relevant data changes.
+- Does nothing to the issue when the tracked feed is unchanged.
 - Stores a compressed comparison snapshot in an HTML comment in the issue body, so it does not commit generated state into the repository.
-- Migrates an older unfiltered monitor snapshot silently on the first run after this version is installed, avoiding a bulk removal notification.
 - Uses only Node.js built-ins; no dependency installation is required.
+
+## GraphQL request transport
+
+The monitor sends the read-only `GetSyslumennAuctions` operation as a JSON `POST` request to the GraphQL endpoint. Keeping the GraphQL document out of the URL avoids query-string parsing and edge-filtering problems.
+
+Client errors such as HTTP `400` are reported immediately and include the endpoint response in the GitHub Actions step summary. Temporary network failures, HTTP `408`, `425`, `429`, and `5xx` responses are retried with exponential backoff.
 
 ## Install
 
@@ -39,13 +35,13 @@ The test file is optional:
 scripts/uppbod-auction-monitor.test.mjs
 ```
 
-Run the test locally with:
+Run the tests locally with:
 
 ```bash
 node --test scripts/uppbod-auction-monitor.test.mjs
 ```
 
-After merging to the default branch, run the workflow manually once to establish the baseline. Scheduled workflows use the latest commit on the default branch. For an existing installation, the first run upgrades the stored snapshot to the filtered format without posting an auction-change comment.
+After merging to the default branch, run the workflow manually once to establish the baseline. Scheduled workflows use the latest commit on the default branch.
 
 ## Permissions and reporting destination
 

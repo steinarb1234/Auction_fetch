@@ -6,7 +6,20 @@ import { gunzipSync, gzipSync } from 'node:zlib'
 export const AUCTION_ENDPOINT = 'https://island.is/api/graphql'
 export const ISSUE_TITLE = 'Uppboð auction monitor'
 export const ISSUE_LABEL = 'uppbod-auction-monitor'
-export const TRACKED_AUCTION_TYPES = ['Framhald uppboðs', 'Sölu lokið']
+
+export const AUCTION_TYPES = Object.freeze({
+  START: 'Byrjun uppboðs',
+  CONTINUATION: 'Framhald uppboðs',
+  SOLD: 'Sölu lokið',
+})
+
+export const MONITORED_AUCTION_TYPES = Object.freeze([
+  AUCTION_TYPES.CONTINUATION,
+  AUCTION_TYPES.SOLD,
+])
+
+const MONITORED_AUCTION_TYPE_SET = new Set(MONITORED_AUCTION_TYPES)
+const SNAPSHOT_SCOPE = 'continuation-and-sold'
 
 export const AUCTION_FIELDS = [
   'office',
@@ -72,7 +85,6 @@ const GRAPHQL_QUERY = `
   }
 `
 
-const SNAPSHOT_VERSION = 2
 const SNAPSHOT_MARKER_NAME = 'UPPBOD_AUCTION_SNAPSHOT_V2'
 const SNAPSHOT_MARKER_PATTERN =
   /<!-- UPPBOD_AUCTION_SNAPSHOT_V(?:1|2):([A-Za-z0-9+/=]+) -->/
@@ -95,21 +107,6 @@ function cleanValue(value) {
     .trim()
 }
 
-function auctionTypeKey(value) {
-  return cleanValue(value)
-    .normalize('NFKC')
-    .replace(/\s+/g, ' ')
-    .toLocaleLowerCase('is')
-}
-
-const TRACKED_AUCTION_TYPE_KEYS = new Set(
-  TRACKED_AUCTION_TYPES.map(auctionTypeKey),
-)
-
-export function isTrackedAuctionType(value) {
-  return TRACKED_AUCTION_TYPE_KEYS.has(auctionTypeKey(value))
-}
-
 function shortHash(value) {
   return createHash('sha256')
     .update(value)
@@ -123,12 +120,30 @@ function normalizeAuction(rawAuction) {
   )
 }
 
+export function isMonitoredAuction(auction) {
+  const display = auction?.display ?? auction ?? {}
+  return MONITORED_AUCTION_TYPE_SET.has(cleanValue(display.auctionType))
+}
+
+export function filterMonitoredSnapshot(snapshot) {
+  return {
+    version: 2,
+    scope: SNAPSHOT_SCOPE,
+    generatedAt: snapshot?.generatedAt ?? new Date().toISOString(),
+    auctions: (snapshot?.auctions ?? []).filter(isMonitoredAuction),
+  }
+}
+
 function fallbackIdentity(auction) {
+  // Keep auctionType out of the fallback key so a type transition is reported
+  // as a field change even when a source record has no lotId.
   return [
     auction.office,
     auction.lotName,
     auction.lotType,
     auction.location,
+    auction.petitioners,
+    auction.respondent,
   ].join('\u001f')
 }
 
@@ -188,9 +203,7 @@ export function buildSnapshot(rawAuctions, generatedAt = new Date().toISOString(
     throw new TypeError('Auction data must be an array')
   }
 
-  const normalizedAuctions = rawAuctions
-    .map(normalizeAuction)
-    .filter((auction) => isTrackedAuctionType(auction.auctionType))
+  const normalizedAuctions = rawAuctions.map(normalizeAuction)
   const groups = new Map()
 
   for (const auction of normalizedAuctions) {
@@ -225,28 +238,11 @@ export function buildSnapshot(rawAuctions, generatedAt = new Date().toISOString(
   )
 
   return {
-    version: SNAPSHOT_VERSION,
+    version: 2,
+    scope: 'all',
     generatedAt,
-    filters: {
-      auctionTypes: [...TRACKED_AUCTION_TYPES],
-    },
     auctions: snapshotAuctions,
   }
-}
-
-function snapshotUsesCurrentAuctionTypeFilter(snapshot) {
-  const configuredTypes = snapshot?.filters?.auctionTypes
-  if (snapshot?.version !== SNAPSHOT_VERSION || !Array.isArray(configuredTypes)) {
-    return false
-  }
-
-  const configuredKeys = [...new Set(configuredTypes.map(auctionTypeKey))].sort()
-  const trackedKeys = [...TRACKED_AUCTION_TYPE_KEYS].sort()
-
-  return (
-    configuredKeys.length === trackedKeys.length &&
-    configuredKeys.every((value, index) => value === trackedKeys[index])
-  )
 }
 
 export function diffSnapshots(previousSnapshot, currentSnapshot) {
@@ -263,11 +259,16 @@ export function diffSnapshots(previousSnapshot, currentSnapshot) {
 
   for (const [key, current] of currentByKey) {
     const previous = previousByKey.get(key)
+    const currentIsMonitored = isMonitoredAuction(current)
+
     if (!previous) {
-      added.push(current)
+      if (currentIsMonitored) {
+        added.push(current)
+      }
       continue
     }
 
+    const previousIsMonitored = isMonitoredAuction(previous)
     const fields = AUCTION_FIELDS.filter(
       (field) => previous.hashes?.[field] !== current.hashes?.[field],
     ).map((field) => ({
@@ -280,13 +281,13 @@ export function diffSnapshots(previousSnapshot, currentSnapshot) {
         : undefined,
     }))
 
-    if (fields.length > 0) {
+    if (fields.length > 0 && (previousIsMonitored || currentIsMonitored)) {
       changed.push({ previous, current, fields })
     }
   }
 
   for (const [key, previous] of previousByKey) {
-    if (!currentByKey.has(key)) {
+    if (!currentByKey.has(key) && isMonitoredAuction(previous)) {
       removed.push(previous)
     }
   }
@@ -330,7 +331,7 @@ export function decodeSnapshotFromIssueBody(issueBody) {
     )
 
     if (
-      ![1, SNAPSHOT_VERSION].includes(snapshot?.version) ||
+      ![1, 2].includes(snapshot?.version) ||
       !Array.isArray(snapshot.auctions) ||
       typeof snapshot.generatedAt !== 'string'
     ) {
@@ -372,22 +373,35 @@ function describeAuction(snapshotAuction) {
   const auction = snapshotAuction.display ?? {}
   const name = escapeInline(auction.lotName || 'Unnamed auction')
   const id = escapeInline(auction.lotId || 'no lot ID')
-  const auctionType = auction.auctionType
-    ? `Type: ${escapeInline(auction.auctionType)}`
-    : null
   const dateTime = [auction.auctionDate, auction.auctionTime]
     .filter(Boolean)
     .join(' ')
   const location = auction.auctionTakesPlaceAt || auction.location
+  const auctionType = auction.auctionType
 
   return [
     `**${name}** (${id})`,
-    auctionType,
+    auctionType
+      ? `Auction type: **${escapeInline(auctionType)}**`
+      : 'Auction type: **unknown**',
     dateTime ? escapeInline(dateTime) : null,
     location ? escapeInline(location) : null,
   ]
     .filter(Boolean)
     .join(' — ')
+}
+
+function monitoringTransition(previous, current) {
+  const previousIsMonitored = isMonitoredAuction(previous)
+  const currentIsMonitored = isMonitoredAuction(current)
+
+  if (!previousIsMonitored && currentIsMonitored) {
+    return 'Monitoring: entered the tracked auction types'
+  }
+  if (previousIsMonitored && !currentIsMonitored) {
+    return 'Monitoring: left the tracked auction types'
+  }
+  return null
 }
 
 export function renderChangeComment(
@@ -412,23 +426,27 @@ export function renderChangeComment(
     }
   }
 
-  addSection('Added', diff.added, (auction) => `- ${describeAuction(auction)}`)
+  addSection('Added to tracked auctions', diff.added, (auction) =>
+    `- ${describeAuction(auction)}`,
+  )
 
   addSection('Changed', diff.changed, ({ previous, current, fields }) => {
-    const details = fields
-      .map(({ field, oldValue, newValue }) => {
-        const label = FIELD_LABELS[field] ?? field
-        if (REPORT_FIELDS.includes(field)) {
-          return `${label}: ${codeValue(oldValue)} → ${codeValue(newValue)}`
-        }
-        return `${label}: changed`
-      })
-      .join('; ')
+    const details = fields.map(({ field, oldValue, newValue }) => {
+      const label = FIELD_LABELS[field] ?? field
+      if (REPORT_FIELDS.includes(field)) {
+        return `${label}: ${codeValue(oldValue)} → ${codeValue(newValue)}`
+      }
+      return `${label}: changed`
+    })
+    const transition = monitoringTransition(previous, current)
+    if (transition) {
+      details.unshift(transition)
+    }
 
-    return `- ${describeAuction(current)}\n  - ${details}`
+    return `- ${describeAuction(current)}\n  - ${details.join('; ')}`
   })
 
-  addSection('Removed or left tracked types', diff.removed, (auction) =>
+  addSection('Removed from source feed', diff.removed, (auction) =>
     `- ${describeAuction(auction)}`,
   )
 
@@ -440,29 +458,35 @@ export function renderIssueBody(
   changeSummary,
   maxRows = DEFAULT_MAX_REPORT_ROWS,
 ) {
-  const rows = snapshot.auctions.slice(0, maxRows).map(({ display }) =>
-    [
-      display.auctionDate,
-      display.auctionTime,
-      display.lotName,
-      display.auctionType,
-      display.lotType,
-      display.auctionTakesPlaceAt || display.location,
-      display.lotId,
-    ]
-      .map((value) => escapeTableCell(value))
-      .join(' | '),
-  )
+  const monitoredSnapshot = filterMonitoredSnapshot(snapshot)
+  const rows = monitoredSnapshot.auctions
+    .slice(0, maxRows)
+    .map(({ display }) =>
+      [
+        display.auctionDate,
+        display.auctionTime,
+        display.lotName,
+        display.auctionType,
+        display.lotType,
+        display.auctionTakesPlaceAt || display.location,
+        display.lotId,
+      ]
+        .map((value) => escapeTableCell(value))
+        .join(' | '),
+    )
 
-  const omitted = snapshot.auctions.length - rows.length
+  const omitted = monitoredSnapshot.auctions.length - rows.length
+  const trackedTypes = MONITORED_AUCTION_TYPES.map((type) => `\`${type}\``).join(
+    ' and ',
+  )
   const lines = [
-    '# Uppboð — current auction report',
+    '# Uppboð — tracked auction report',
     '',
-    'This issue is maintained automatically. It tracks only auctions whose auction type is `Framhald uppboðs` or `Sölu lokið`.',
+    `This issue monitors only listings whose auction type is ${trackedTypes}. The body is refreshed and a comment is added only for relevant changes.`,
     '',
-    `- **Last detected change:** ${snapshot.generatedAt}`,
-    `- **Current tracked auctions:** ${snapshot.auctions.length}`,
-    `- **Tracked auction types:** ${TRACKED_AUCTION_TYPES.map((type) => `\`${type}\``).join(' and ')}`,
+    `- **Last report update:** ${monitoredSnapshot.generatedAt}`,
+    `- **Current tracked auctions:** ${monitoredSnapshot.auctions.length}`,
+    `- **Tracked auction types:** ${trackedTypes}`,
     `- **Latest change:** ${changeSummary}`,
     '- **Polling schedule:** every 15 minutes, at 07, 22, 37, and 52 minutes past the hour in `Atlantic/Reykjavik`.',
     '',
@@ -472,13 +496,13 @@ export function renderIssueBody(
   ]
 
   if (omitted > 0) {
-    lines.push('', `_The table omits ${omitted} additional auctions._`)
+    lines.push('', `_The table omits ${omitted} additional tracked auctions._`)
   }
 
   lines.push(
     '',
-    'The compressed state below is used only to compare the next scheduled fetch.',
-    snapshotMarker(snapshot),
+    'The compressed state below contains only tracked listings and is used to compare the next scheduled fetch.',
+    snapshotMarker(monitoredSnapshot),
   )
 
   const body = `${lines.join('\n')}\n`
@@ -495,31 +519,53 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
 
+function shouldRetryAuctionError(error) {
+  if (!(error instanceof HttpError)) {
+    return true
+  }
+
+  return (
+    error.status === 408 ||
+    error.status === 425 ||
+    error.status === 429 ||
+    error.status >= 500
+  )
+}
+
 export async function fetchAuctions({
   endpoint = process.env.AUCTION_ENDPOINT || AUCTION_ENDPOINT,
   fetchImpl = fetch,
   attempts = 3,
   timeoutMs = 20_000,
+  retryDelayMs = 750,
 } = {}) {
   const url = new URL(endpoint)
-  url.searchParams.set('operationName', 'GetSyslumennAuctions')
-  url.searchParams.set('query', GRAPHQL_QUERY.replace(/\s+/g, ' ').trim())
+  const operationName = 'GetSyslumennAuctions'
+  const requestBody = JSON.stringify({
+    operationName,
+    query: GRAPHQL_QUERY,
+    variables: {},
+  })
 
   let lastError
+  let attemptsUsed = 0
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    attemptsUsed = attempt
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), timeoutMs)
 
     try {
       const response = await fetchImpl(url, {
-        method: 'GET',
+        method: 'POST',
         headers: {
           Accept: 'application/json',
-          'Apollo-Require-Preflight': 'true',
           'Cache-Control': 'no-cache',
+          'Content-Type': 'application/json',
           'User-Agent': 'uppbod-auction-monitor/1.0',
+          'X-Apollo-Operation-Name': operationName,
         },
+        body: requestBody,
         signal: controller.signal,
       })
 
@@ -544,31 +590,51 @@ export async function fetchAuctions({
       }
 
       if (Array.isArray(payload.errors) && payload.errors.length > 0) {
-        throw new Error(
+        throw new HttpError(
           `GraphQL errors: ${payload.errors
             .map((error) => error?.message || 'Unknown GraphQL error')
             .join('; ')}`,
+          response.status,
+          payload,
         )
       }
 
       const auctions = payload.data?.getSyslumennAuctions
       if (!Array.isArray(auctions)) {
-        throw new Error('GraphQL response did not contain an auction array')
+        throw new HttpError(
+          'GraphQL response did not contain an auction array',
+          response.status,
+          payload,
+        )
       }
 
       return auctions
     } catch (error) {
       lastError = error
-      if (attempt < attempts) {
-        await sleep(750 * 2 ** (attempt - 1))
+      if (attempt < attempts && shouldRetryAuctionError(error)) {
+        await sleep(retryDelayMs * 2 ** (attempt - 1))
+      } else {
+        break
       }
     } finally {
       clearTimeout(timeout)
     }
   }
 
+  if (lastError instanceof HttpError) {
+    throw new HttpError(
+      `Could not fetch auctions after ${attemptsUsed} ${
+        attemptsUsed === 1 ? 'attempt' : 'attempts'
+      }: ${lastError.message}`,
+      lastError.status,
+      lastError.responseBody,
+    )
+  }
+
   throw new Error(
-    `Could not fetch auctions after ${attempts} attempts: ${lastError?.message ?? lastError}`,
+    `Could not fetch auctions after ${attemptsUsed} ${
+      attemptsUsed === 1 ? 'attempt' : 'attempts'
+    }: ${lastError?.message ?? lastError}`,
     { cause: lastError },
   )
 }
@@ -703,6 +769,38 @@ async function writeStepSummary(markdown) {
   await appendFile(process.env.GITHUB_STEP_SUMMARY, `${markdown.trim()}\n`)
 }
 
+function formatHttpErrorResponse(error, maxLength = 4_000) {
+  if (!(error instanceof HttpError) || error.responseBody == null) {
+    return null
+  }
+
+  const language = typeof error.responseBody === 'string' ? 'text' : 'json'
+  const serialized =
+    typeof error.responseBody === 'string'
+      ? error.responseBody
+      : JSON.stringify(error.responseBody, null, 2)
+  const safeText = serialized.replace(/```/g, '`\u200b``')
+  const truncated =
+    safeText.length > maxLength
+      ? `${safeText.slice(0, maxLength)}\n... response truncated ...`
+      : safeText
+
+  return {
+    language,
+    status: error.status,
+    text: truncated,
+  }
+}
+
+function needsSnapshotMigration(snapshot) {
+  const filtered = filterMonitoredSnapshot(snapshot)
+  return (
+    snapshot?.version !== 2 ||
+    snapshot?.scope !== SNAPSHOT_SCOPE ||
+    (snapshot?.auctions ?? []).length !== filtered.auctions.length
+  )
+}
+
 function changeSummary(diff) {
   return `${diff.added.length} added, ${diff.changed.length} changed, ${diff.removed.length} removed`
 }
@@ -737,7 +835,8 @@ export async function runMonitor({
     endpoint: env.AUCTION_ENDPOINT || AUCTION_ENDPOINT,
     fetchImpl,
   })
-  const currentSnapshot = buildSnapshot(rawAuctions, now.toISOString())
+  const fullCurrentSnapshot = buildSnapshot(rawAuctions, now.toISOString())
+  const currentSnapshot = filterMonitoredSnapshot(fullCurrentSnapshot)
 
   await ensureMonitorLabel(github)
   const issue = await findMonitorIssue(github)
@@ -754,17 +853,18 @@ export async function runMonitor({
       issueNumber: createdIssue.number,
       issueUrl: createdIssue.html_url,
       auctionCount: currentSnapshot.auctions.length,
+      sourceAuctionCount: fullCurrentSnapshot.auctions.length,
     }
 
     await writeStepSummary(
-      `## Uppboð auction monitor\n\nBaseline created with **${result.auctionCount}** tracked auctions.\n\n${result.issueUrl}`,
+      `## Uppboð auction monitor\n\nBaseline created with **${result.auctionCount}** tracked auctions (${result.sourceAuctionCount} total source listings).\n\n${result.issueUrl}`,
     )
     return result
   }
 
-  const previousSnapshot = decodeSnapshotFromIssueBody(issue.body || '')
+  const storedSnapshot = decodeSnapshotFromIssueBody(issue.body || '')
 
-  if (!previousSnapshot) {
+  if (!storedSnapshot) {
     const body = renderIssueBody(
       currentSnapshot,
       'Baseline reset because the previous issue had no monitor snapshot',
@@ -782,6 +882,7 @@ export async function runMonitor({
       issueNumber: issue.number,
       issueUrl: issue.html_url,
       auctionCount: currentSnapshot.auctions.length,
+      sourceAuctionCount: fullCurrentSnapshot.auctions.length,
     }
     await writeStepSummary(
       `## Uppboð auction monitor\n\nBaseline reset with **${result.auctionCount}** tracked auctions.\n\n${result.issueUrl}`,
@@ -789,38 +890,43 @@ export async function runMonitor({
     return result
   }
 
-  if (!snapshotUsesCurrentAuctionTypeFilter(previousSnapshot)) {
-    const body = renderIssueBody(
-      currentSnapshot,
-      'Baseline migrated to track only Framhald uppboðs and Sölu lokið',
-      Number(env.MAX_REPORT_ROWS) || DEFAULT_MAX_REPORT_ROWS,
-    )
-    await updateMonitorIssue(github, issue.number, body)
-
-    const result = {
-      status: 'baseline-migrated',
-      issueNumber: issue.number,
-      issueUrl: issue.html_url,
-      auctionCount: currentSnapshot.auctions.length,
-    }
-    await writeStepSummary(
-      `## Uppboð auction monitor\n\nBaseline migrated without an auction-change notification. Tracking **${result.auctionCount}** auctions of type **Framhald uppboðs** or **Sölu lokið**.\n\n${result.issueUrl}`,
-    )
-    return result
-  }
-
-  const diff = diffSnapshots(previousSnapshot, currentSnapshot)
+  const migrationNeeded = needsSnapshotMigration(storedSnapshot)
+  const previousSnapshot = filterMonitoredSnapshot(storedSnapshot)
+  const diff = diffSnapshots(previousSnapshot, fullCurrentSnapshot)
 
   if (!hasChanges(diff)) {
+    if (migrationNeeded) {
+      const body = renderIssueBody(
+        currentSnapshot,
+        'Tracking configuration updated; no tracked auction changes detected',
+        Number(env.MAX_REPORT_ROWS) || DEFAULT_MAX_REPORT_ROWS,
+      )
+      await updateMonitorIssue(github, issue.number, body)
+
+      const result = {
+        status: 'configuration-updated',
+        issueNumber: issue.number,
+        issueUrl: issue.html_url,
+        auctionCount: currentSnapshot.auctions.length,
+        sourceAuctionCount: fullCurrentSnapshot.auctions.length,
+        diff,
+      }
+      await writeStepSummary(
+        `## Uppboð auction monitor\n\nUpdated the monitor to track only **Framhald uppboðs** and **Sölu lokið**. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
+      )
+      return result
+    }
+
     const result = {
       status: 'unchanged',
       issueNumber: issue.number,
       issueUrl: issue.html_url,
       auctionCount: currentSnapshot.auctions.length,
+      sourceAuctionCount: fullCurrentSnapshot.auctions.length,
       diff,
     }
     await writeStepSummary(
-      `## Uppboð auction monitor\n\nNo tracked auction changes detected. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
+      `## Uppboð auction monitor\n\nNo tracked auction changes detected. Current count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
     )
     return result
   }
@@ -846,10 +952,11 @@ export async function runMonitor({
     issueNumber: issue.number,
     issueUrl: issue.html_url,
     auctionCount: currentSnapshot.auctions.length,
+    sourceAuctionCount: fullCurrentSnapshot.auctions.length,
     diff,
   }
   await writeStepSummary(
-    `## Uppboð auction monitor\n\nDetected **${summary}** among tracked auctions. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
+    `## Uppboð auction monitor\n\nDetected **${summary}**. Current tracked count: **${result.auctionCount}**.\n\n${result.issueUrl}`,
   )
   return result
 }
@@ -859,13 +966,15 @@ async function main() {
     const result = await runMonitor()
     console.log(JSON.stringify(result, null, 2))
   } catch (error) {
-    const details =
-      error instanceof HttpError && error.responseBody
-        ? `\n${JSON.stringify(error.responseBody, null, 2).slice(0, 4_000)}`
-        : ''
+    const response = formatHttpErrorResponse(error)
+    const details = response ? `\n${response.text}` : ''
     console.error(`${error.stack || error}${details}`)
+
+    const responseSummary = response
+      ? `\n\n**Endpoint response (HTTP ${response.status})**\n\n\`\`\`${response.language}\n${response.text}\n\`\`\``
+      : ''
     await writeStepSummary(
-      `## Uppboð auction monitor failed\n\n\`${cleanValue(error.message)}\``,
+      `## Uppboð auction monitor failed\n\n\`${cleanValue(error.message)}\`${responseSummary}`,
     ).catch(() => {})
     process.exitCode = 1
   }
