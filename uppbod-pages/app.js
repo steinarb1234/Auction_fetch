@@ -57,7 +57,6 @@ const elements = {
   summaryActive: document.querySelector('#summary-active'),
   summaryFinished: document.querySelector('#summary-finished'),
   summaryRemoved: document.querySelector('#summary-removed'),
-  summaryEvents: document.querySelector('#summary-events'),
 }
 
 const ICELANDIC_MONTHS = [
@@ -431,7 +430,6 @@ function populateArchive(archive) {
       ? (counts.removed ?? inferredCounts.removed)
       : inferredCounts.removed,
   )
-  elements.summaryEvents.textContent = formatNumber(counts.events)
   elements.updated.textContent = archive.generatedAt
     ? `Síðasta breyting: ${formatDate(archive.generatedAt)}`
     : 'Engir uppboðsatburðir hafa verið skráðir'
