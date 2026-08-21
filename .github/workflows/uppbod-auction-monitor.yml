@@ -73,6 +73,9 @@ jobs:
           fi
 
           mkdir -p "$history_dir/site/data"
+          # This file is deployment-only. Remove any accidentally committed
+          # copy before staging the persistent history branch.
+          rm -f "$history_dir/site/data/latest-fetch.json"
 
           # Replace versioned site assets while preserving the persistent data.
           find "$history_dir/site" -mindepth 1 -maxdepth 1 \
@@ -142,6 +145,34 @@ jobs:
             git -C "$HISTORY_DIR" push origin "HEAD:${HISTORY_BRANCH}"
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Add latest successful fetch metadata to Pages artifact
+        env:
+          HISTORY_DIR: ${{ steps.history.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$RUNNER_TEMP/uppbod-auctions.json" \
+            "$HISTORY_DIR/site/data/latest-fetch.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          source_path, destination_path = sys.argv[1:3]
+          with open(source_path, encoding="utf-8") as stream:
+              source = json.load(stream)
+
+          payload = {
+              "version": 1,
+              "fetchedAt": source["fetchedAt"],
+              "sourceCount": source.get("sourceCount", len(source.get("auctions", []))),
+          }
+          temporary_path = f"{destination_path}.tmp-{os.getpid()}"
+          with open(temporary_path, "w", encoding="utf-8") as stream:
+              json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+              stream.write("\n")
+          os.replace(temporary_path, destination_path)
+          PY
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6

@@ -1,4 +1,5 @@
 const PAGE_SIZE = 50
+const SOLD_AUCTION_TYPE = 'Sölu lokið'
 
 const FIELD_LABELS = {
   office: 'Office',
@@ -49,9 +50,12 @@ const elements = {
   error: document.querySelector('#load-error'),
   showMore: document.querySelector('#show-more'),
   updated: document.querySelector('#archive-updated'),
+  latestFetch: document.querySelector('#latest-fetch'),
+  latestSourceCount: document.querySelector('#latest-source-count'),
   databaseSize: document.querySelector('#database-size'),
   summaryListings: document.querySelector('#summary-listings'),
   summaryActive: document.querySelector('#summary-active'),
+  summaryFinished: document.querySelector('#summary-finished'),
   summaryRemoved: document.querySelector('#summary-removed'),
   summaryEvents: document.querySelector('#summary-events'),
 }
@@ -92,6 +96,31 @@ function formatBytes(bytes) {
 function text(value, fallback = '—') {
   const cleaned = String(value ?? '').trim()
   return cleaned || fallback
+}
+
+function isFinishedAuctionType(value) {
+  return normalize(value) === normalize(SOLD_AUCTION_TYPE)
+}
+
+function listingState(listing) {
+  const sourcePresent =
+    listing.sourcePresent ??
+    (listing.status === 'removed' ? false : Boolean(listing.isActive))
+  const isFinished =
+    listing.isFinished ??
+    (sourcePresent && isFinishedAuctionType(listing.current?.auctionType))
+
+  if (!sourcePresent) {
+    return { key: 'removed', label: 'Removed from feed', variant: 'removed' }
+  }
+  if (isFinished) {
+    return { key: 'finished', label: 'Finished', variant: 'finished' }
+  }
+  return { key: 'active', label: 'Active', variant: 'active' }
+}
+
+function googleSearchUrl(title) {
+  return `https://www.google.com/search?q=${encodeURIComponent(title)}`
 }
 
 function el(tag, options = {}, children = []) {
@@ -150,7 +179,9 @@ function listingMatches(listing) {
   const searchable = normalize(listing.searchText)
   if (terms.some((term) => !searchable.includes(term))) return false
 
-  if (elements.status.value && listing.status !== elements.status.value) return false
+  if (elements.status.value && listingState(listing).key !== elements.status.value) {
+    return false
+  }
 
   const type = elements.auctionType.value
   if (type && !listing.events.some((event) => event.auctionType === type)) return false
@@ -242,9 +273,23 @@ function listingCard(listing) {
   const details = el('details', { className: 'listing' })
   const summary = el('summary', { className: 'listing__summary' })
   const main = el('div')
+  const title = text(listing.current.lotName, 'Unnamed auction')
+  const currentState = listingState(listing)
+  const titleLink = el('a', {
+    className: 'listing__title-link',
+    text: title,
+    attrs: {
+      href: googleSearchUrl(title),
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      'aria-label': `Search Google for ${title} (opens in a new tab)`,
+      title: `Search Google for ${title}`,
+    },
+  })
+  titleLink.addEventListener('click', (event) => event.stopPropagation())
   const titleRow = el('div', { className: 'listing__title-row' }, [
-    el('h3', { text: text(listing.current.lotName, 'Unnamed auction') }),
-    badge(listing.isActive ? 'Active' : 'Removed', listing.isActive ? 'active' : 'removed'),
+    el('h3', {}, [titleLink]),
+    badge(currentState.label, currentState.variant),
     listing.current.auctionType ? badge(listing.current.auctionType) : null,
   ])
   main.append(titleRow)
@@ -270,7 +315,14 @@ function listingCard(listing) {
     el('div', { className: 'current-grid' }, [
       currentItem('Auction type', current.auctionType),
       currentItem('Auction date', [current.auctionDate, current.auctionTime].filter(Boolean).join(' ')),
-      currentItem('Current status', listing.isActive ? 'Present in source feed' : `Removed ${formatDate(listing.removedAt)}`),
+      currentItem(
+        'Current status',
+        currentState.key === 'active'
+          ? 'Active — present in source feed'
+          : currentState.key === 'finished'
+            ? 'Finished (Sölu lokið) — present in source feed'
+            : `Removed from source feed ${formatDate(listing.removedAt)}`,
+      ),
       currentItem('Lot type', current.lotType),
       currentItem('Location', currentLocation(listing)),
       currentItem('Office', current.office),
@@ -307,9 +359,27 @@ function applyFilters() {
 function populateArchive(archive) {
   state.archive = archive
   const counts = archive.counts
+  const inferredCounts = archive.listings.reduce(
+    (result, listing) => {
+      result[listingState(listing).key] += 1
+      return result
+    },
+    { active: 0, finished: 0, removed: 0 },
+  )
   elements.summaryListings.textContent = numberFormatter.format(counts.listings)
-  elements.summaryActive.textContent = numberFormatter.format(counts.active)
-  elements.summaryRemoved.textContent = numberFormatter.format(counts.removed)
+  elements.summaryActive.textContent = numberFormatter.format(
+    archive.version >= 2 ? (counts.active ?? inferredCounts.active) : inferredCounts.active,
+  )
+  elements.summaryFinished.textContent = numberFormatter.format(
+    archive.version >= 2
+      ? (counts.finished ?? inferredCounts.finished)
+      : inferredCounts.finished,
+  )
+  elements.summaryRemoved.textContent = numberFormatter.format(
+    archive.version >= 2
+      ? (counts.removed ?? inferredCounts.removed)
+      : inferredCounts.removed,
+  )
   elements.summaryEvents.textContent = numberFormatter.format(counts.events)
   elements.updated.textContent = archive.generatedAt
     ? `Last recorded change: ${formatDate(archive.generatedAt)}`
@@ -328,18 +398,41 @@ function populateArchive(archive) {
   render()
 }
 
+function populateLatestFetch(fetchStatus, archive) {
+  const fetchedAt = fetchStatus?.fetchedAt || archive.generatedAt
+  if (fetchedAt) {
+    elements.latestFetch.textContent = formatDate(fetchedAt)
+    elements.latestFetch.setAttribute('datetime', fetchedAt)
+  } else {
+    elements.latestFetch.textContent = 'No successful fetch recorded yet'
+    elements.latestFetch.removeAttribute('datetime')
+  }
+
+  const sourceCount = Number(fetchStatus?.sourceCount)
+  elements.latestSourceCount.textContent = Number.isFinite(sourceCount)
+    ? `${numberFormatter.format(sourceCount)} source listing${sourceCount === 1 ? '' : 's'}`
+    : ''
+}
+
 async function loadArchive() {
   try {
+    const latestFetchRequest = fetch('data/latest-fetch.json', { cache: 'no-store' })
+      .then((response) => (response.ok ? response.json() : null))
+      .catch(() => null)
     const response = await fetch('data/history.json', { cache: 'no-cache' })
     if (!response.ok) throw new Error(`History request failed with HTTP ${response.status}`)
     const archive = await response.json()
     if (!Array.isArray(archive.listings)) throw new Error('History file has an unsupported structure')
     populateArchive(archive)
+    populateLatestFetch(await latestFetchRequest, archive)
   } catch (error) {
     elements.resultCount.textContent = 'History unavailable'
     elements.error.hidden = false
     elements.error.textContent = `Could not load the auction history: ${error.message}`
     elements.updated.textContent = 'Archive could not be loaded'
+    elements.latestFetch.textContent = 'Fetch status unavailable'
+    elements.latestFetch.removeAttribute('datetime')
+    elements.latestSourceCount.textContent = ''
   }
 }
 

@@ -15,8 +15,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 1
-EXPORT_VERSION = 1
+SCHEMA_VERSION = 2
+EXPORT_VERSION = 2
+SOLD_AUCTION_TYPE = "Sölu lokið"
 
 AUCTION_FIELDS = (
     "office",
@@ -67,6 +68,16 @@ def clean_value(value: Any) -> str:
 def normalize_search(value: str) -> str:
     value = unicodedata.normalize("NFKC", clean_value(value)).casefold()
     return " ".join(value.split())
+
+
+def is_sold_auction(auction_type: str) -> bool:
+    return normalize_search(auction_type) == normalize_search(SOLD_AUCTION_TYPE)
+
+
+def is_active_auction(
+    fields: dict[str, str], *, is_present: bool = True
+) -> bool:
+    return is_present and not is_sold_auction(fields["auctionType"])
 
 
 def short_hash(value: str, length: int = 24) -> str:
@@ -198,7 +209,7 @@ def ensure_schema(connection: sqlite3.Connection) -> bool:
             f"Database schema {current_version} is newer than supported schema {SCHEMA_VERSION}"
         )
 
-    was_new = current_version == 0
+    schema_changed = current_version == 0
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS metadata (
@@ -214,6 +225,7 @@ def ensure_schema(connection: sqlite3.Connection) -> bool:
           first_seen_at TEXT NOT NULL,
           last_event_at TEXT NOT NULL,
           removed_at TEXT,
+          is_present INTEGER NOT NULL CHECK (is_present IN (0, 1)),
           is_active INTEGER NOT NULL CHECK (is_active IN (0, 1)),
           current_json TEXT NOT NULL,
           office TEXT NOT NULL,
@@ -280,16 +292,84 @@ def ensure_schema(connection: sqlite3.Connection) -> bool:
         LEFT JOIN event_changes ON event_changes.event_id = events.id;
         """
     )
-    if was_new:
-        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    columns = {
+        row["name"] for row in connection.execute("PRAGMA table_info(listings)")
+    }
+    added_presence_column = False
+    if "is_present" not in columns:
+        connection.execute(
+            """
+            ALTER TABLE listings
+            ADD COLUMN is_present INTEGER NOT NULL DEFAULT 1
+            CHECK (is_present IN (0, 1))
+            """
+        )
+        # Schema v1 used is_active to mean presence in the source feed.
+        connection.execute("UPDATE listings SET is_present = is_active")
+        added_presence_column = True
+        schema_changed = True
+
+    if current_version < 2 or added_presence_column:
+        rows = list(
+            connection.execute(
+                "SELECT id, is_present, auction_type FROM listings"
+            )
+        )
         connection.executemany(
-            "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+            "UPDATE listings SET is_active = ? WHERE id = ?",
             (
-                ("schema_version", str(SCHEMA_VERSION)),
-                ("export_version", str(EXPORT_VERSION)),
+                (
+                    int(
+                        bool(row["is_present"])
+                        and not is_sold_auction(row["auction_type"])
+                    ),
+                    int(row["id"]),
+                )
+                for row in rows
             ),
         )
-    return was_new
+        schema_changed = True
+
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS listings_presence_status_idx
+        ON listings(is_present, is_active, removed_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE VIEW IF NOT EXISTS listing_current_status AS
+        SELECT
+          listings.*,
+          CASE
+            WHEN is_present = 0 THEN 'removed'
+            WHEN is_active = 0 THEN 'finished'
+            ELSE 'active'
+          END AS lifecycle_status
+        FROM listings
+        """
+    )
+
+    if current_version != SCHEMA_VERSION:
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        schema_changed = True
+
+    metadata_changed = False
+    for key, value in (
+        ("schema_version", str(SCHEMA_VERSION)),
+        ("export_version", str(EXPORT_VERSION)),
+    ):
+        current = connection.execute(
+            "SELECT value FROM metadata WHERE key = ?", (key,)
+        ).fetchone()
+        if current is None or current["value"] != value:
+            connection.execute(
+                "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+                (key, value),
+            )
+            metadata_changed = True
+    return schema_changed or metadata_changed
 
 
 def row_to_fields(row: sqlite3.Row) -> dict[str, str]:
@@ -301,6 +381,7 @@ def listing_values(
     observed_at: str,
     *,
     first_seen_at: str,
+    is_present: int,
     is_active: int,
     removed_at: str | None,
 ) -> tuple[Any, ...]:
@@ -312,6 +393,7 @@ def listing_values(
         first_seen_at,
         observed_at,
         removed_at,
+        is_present,
         is_active,
         stable_json(fields),
         fields["office"],
@@ -373,9 +455,9 @@ def unique_candidate(
     rows: Iterable[sqlite3.Row], matched_ids: set[int]
 ) -> sqlite3.Row | None:
     available = [row for row in rows if int(row["id"]) not in matched_ids]
-    active = [row for row in available if int(row["is_active"]) == 1]
-    if len(active) == 1:
-        return active[0]
+    present = [row for row in available if int(row["is_present"]) == 1]
+    if len(present) == 1:
+        return present[0]
     if len(available) == 1:
         return available[0]
     return None
@@ -391,11 +473,12 @@ def update_database(
     connection = connect_database(database_path)
 
     counts = Counter()
-    changed = False
+    database_changed = False
+    event_changed = False
     try:
         with connection:
-            schema_created = ensure_schema(connection)
-            changed = schema_created or not database_existed
+            schema_changed = ensure_schema(connection)
+            database_changed = schema_changed or not database_existed
 
             existing_rows = list(connection.execute("SELECT * FROM listings"))
             by_identity = {row["identity_key"]: row for row in existing_rows}
@@ -430,19 +513,21 @@ def update_database(
                         """
                         INSERT INTO listings(
                           identity_key, stable_fingerprint, content_hash,
-                          first_seen_at, last_event_at, removed_at, is_active,
-                          current_json, office, location, auction_type, lot_type,
-                          lot_name, lot_id, lot_items, auction_date, auction_time,
-                          petitioners, respondent, publish_text, auction_takes_place_at
+                          first_seen_at, last_event_at, removed_at, is_present,
+                          is_active, current_json, office, location, auction_type,
+                          lot_type, lot_name, lot_id, lot_items, auction_date,
+                          auction_time, petitioners, respondent, publish_text,
+                          auction_takes_place_at
                         ) VALUES (
-                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                         )
                         """,
                         listing_values(
                             record,
                             observed_at,
                             first_seen_at=observed_at,
-                            is_active=1,
+                            is_present=1,
+                            is_active=int(is_active_auction(fields)),
                             removed_at=None,
                         ),
                     )
@@ -457,7 +542,8 @@ def update_database(
                     )
                     matched_ids.add(listing_id)
                     counts["added"] += 1
-                    changed = True
+                    database_changed = True
+                    event_changed = True
                     continue
 
                 listing_id = int(row["id"])
@@ -468,14 +554,14 @@ def update_database(
                     for field in AUCTION_FIELDS
                     if previous_fields.get(field, "") != fields[field]
                 ]
-                was_active = int(row["is_active"]) == 1
+                was_present = int(row["is_present"]) == 1
 
                 # Adopt a more useful current identity only alongside a real
                 # source event. This keeps internal key reconciliation from
                 # changing last-event timestamps on an otherwise unchanged poll.
                 identity_key = row["identity_key"]
                 proposed_identity = record["identity_key"]
-                if (field_changes or not was_active) and proposed_identity != identity_key:
+                if (field_changes or not was_present) and proposed_identity != identity_key:
                     conflict = connection.execute(
                         "SELECT id FROM listings WHERE identity_key = ? AND id <> ?",
                         (proposed_identity, listing_id),
@@ -484,7 +570,7 @@ def update_database(
                         identity_key = proposed_identity
                 record = {**record, "identity_key": identity_key}
 
-                if not was_active:
+                if not was_present:
                     insert_event(
                         connection,
                         listing_id=listing_id,
@@ -495,7 +581,8 @@ def update_database(
                         changes=field_changes,
                     )
                     counts["added"] += 1
-                    changed = True
+                    database_changed = True
+                    event_changed = True
                 elif field_changes:
                     insert_event(
                         connection,
@@ -507,18 +594,20 @@ def update_database(
                         changes=field_changes,
                     )
                     counts["changed"] += 1
-                    changed = True
+                    database_changed = True
+                    event_changed = True
 
-                if not was_active or field_changes or identity_key != row["identity_key"]:
+                if not was_present or field_changes or identity_key != row["identity_key"]:
                     connection.execute(
                         """
                         UPDATE listings SET
                           identity_key = ?, stable_fingerprint = ?, content_hash = ?,
-                          last_event_at = ?, removed_at = NULL, is_active = 1,
-                          current_json = ?, office = ?, location = ?, auction_type = ?,
-                          lot_type = ?, lot_name = ?, lot_id = ?, lot_items = ?,
-                          auction_date = ?, auction_time = ?, petitioners = ?,
-                          respondent = ?, publish_text = ?, auction_takes_place_at = ?
+                          last_event_at = ?, removed_at = NULL, is_present = 1,
+                          is_active = ?, current_json = ?, office = ?, location = ?,
+                          auction_type = ?, lot_type = ?, lot_name = ?, lot_id = ?,
+                          lot_items = ?, auction_date = ?, auction_time = ?,
+                          petitioners = ?, respondent = ?, publish_text = ?,
+                          auction_takes_place_at = ?
                         WHERE id = ?
                         """,
                         (
@@ -526,6 +615,7 @@ def update_database(
                             record["stable_fingerprint"],
                             record["content_hash"],
                             observed_at,
+                            int(is_active_auction(fields)),
                             stable_json(fields),
                             fields["office"],
                             fields["location"],
@@ -546,7 +636,7 @@ def update_database(
 
             for row in existing_rows:
                 listing_id = int(row["id"])
-                if listing_id in matched_ids or int(row["is_active"]) == 0:
+                if listing_id in matched_ids or int(row["is_present"]) == 0:
                     continue
                 previous_fields = row_to_fields(row)
                 insert_event(
@@ -560,15 +650,17 @@ def update_database(
                 connection.execute(
                     """
                     UPDATE listings
-                    SET is_active = 0, removed_at = ?, last_event_at = ?
+                    SET is_present = 0, is_active = 0,
+                        removed_at = ?, last_event_at = ?
                     WHERE id = ?
                     """,
                     (observed_at, observed_at, listing_id),
                 )
                 counts["removed"] += 1
-                changed = True
+                database_changed = True
+                event_changed = True
 
-            if changed:
+            if event_changed:
                 connection.executemany(
                     "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
                     (
@@ -585,7 +677,7 @@ def update_database(
         connection.close()
 
     return {
-        "changed": changed,
+        "changed": database_changed,
         "observedAt": observed_at,
         "sourceCount": len(current_records),
         "added": counts["added"],
@@ -671,6 +763,8 @@ def build_site_payload(database_path: Path) -> tuple[dict[str, Any], dict[str, A
 
     payload_listings: list[dict[str, Any]] = []
     active_count = 0
+    finished_count = 0
+    removed_count = 0
     for row in listings:
         listing_events = events_by_listing.get(int(row["id"]), [])
         current = json.loads(row["current_json"])
@@ -682,14 +776,27 @@ def build_site_payload(database_path: Path) -> tuple[dict[str, Any], dict[str, A
         search_text = " ".join(
             sorted({normalize_search(value) for value in historical_values if clean_value(value)})
         )
+        is_present_in_feed = bool(row["is_present"])
         is_active = bool(row["is_active"])
-        active_count += int(is_active)
+        is_finished = is_present_in_feed and not is_active
+        if not is_present_in_feed:
+            status = "removed"
+        elif is_finished:
+            status = "finished"
+        else:
+            status = "active"
+
+        active_count += int(status == "active")
+        finished_count += int(status == "finished")
+        removed_count += int(status == "removed")
         payload_listings.append(
             {
                 "id": int(row["id"]),
                 "identityKey": row["identity_key"],
-                "status": "active" if is_active else "removed",
+                "status": status,
                 "isActive": is_active,
+                "isFinished": is_finished,
+                "sourcePresent": is_present_in_feed,
                 "firstSeenAt": row["first_seen_at"],
                 "lastEventAt": row["last_event_at"],
                 "removedAt": row["removed_at"],
@@ -713,7 +820,9 @@ def build_site_payload(database_path: Path) -> tuple[dict[str, Any], dict[str, A
         "counts": {
             "listings": len(payload_listings),
             "active": active_count,
-            "removed": len(payload_listings) - active_count,
+            "finished": finished_count,
+            "removed": removed_count,
+            "sourcePresent": active_count + finished_count,
             "events": len(events),
             "addedEvents": event_type_counter["added"],
             "changedEvents": event_type_counter["changed"],

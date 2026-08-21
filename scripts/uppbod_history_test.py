@@ -66,6 +66,140 @@ class UppbodHistoryTests(unittest.TestCase):
         connection.row_factory = sqlite3.Row
         return connection
 
+    def create_v1_database(
+        self,
+        rows: list[tuple[dict[str, str], bool, str | None]],
+        *,
+        observed_at: str = "2026-08-21T08:00:00Z",
+    ) -> None:
+        self.database.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self.database) as connection:
+            connection.executescript(
+                """
+                PRAGMA user_version = 1;
+
+                CREATE TABLE metadata (
+                  key TEXT PRIMARY KEY,
+                  value TEXT NOT NULL
+                );
+
+                CREATE TABLE listings (
+                  id INTEGER PRIMARY KEY,
+                  identity_key TEXT NOT NULL UNIQUE,
+                  stable_fingerprint TEXT NOT NULL,
+                  content_hash TEXT NOT NULL,
+                  first_seen_at TEXT NOT NULL,
+                  last_event_at TEXT NOT NULL,
+                  removed_at TEXT,
+                  is_active INTEGER NOT NULL CHECK (is_active IN (0, 1)),
+                  current_json TEXT NOT NULL,
+                  office TEXT NOT NULL,
+                  location TEXT NOT NULL,
+                  auction_type TEXT NOT NULL,
+                  lot_type TEXT NOT NULL,
+                  lot_name TEXT NOT NULL,
+                  lot_id TEXT NOT NULL,
+                  lot_items TEXT NOT NULL,
+                  auction_date TEXT NOT NULL,
+                  auction_time TEXT NOT NULL,
+                  petitioners TEXT NOT NULL,
+                  respondent TEXT NOT NULL,
+                  publish_text TEXT NOT NULL,
+                  auction_takes_place_at TEXT NOT NULL
+                );
+
+                CREATE TABLE events (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  listing_id INTEGER NOT NULL,
+                  event_type TEXT NOT NULL,
+                  reason TEXT NOT NULL,
+                  observed_at TEXT NOT NULL,
+                  auction_type TEXT NOT NULL,
+                  lot_name TEXT NOT NULL,
+                  lot_id TEXT NOT NULL,
+                  snapshot_json TEXT NOT NULL,
+                  FOREIGN KEY (listing_id) REFERENCES listings(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE event_changes (
+                  event_id INTEGER NOT NULL,
+                  field_name TEXT NOT NULL,
+                  old_value TEXT NOT NULL,
+                  new_value TEXT NOT NULL,
+                  PRIMARY KEY (event_id, field_name),
+                  FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+                );
+                """
+            )
+            connection.executemany(
+                "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                (
+                    ("schema_version", "1"),
+                    ("export_version", "1"),
+                    ("last_event_at", observed_at),
+                    ("updated_at", observed_at),
+                ),
+            )
+
+            for raw, was_present, removed_at in rows:
+                fields = history.normalize_auction(raw)
+                fingerprint = history.stable_fingerprint(fields)
+                identity_key = history.base_identity_key(fields, fingerprint)
+                serialized = history.stable_json(fields)
+                content_hash = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+                cursor = connection.execute(
+                    """
+                    INSERT INTO listings(
+                      identity_key, stable_fingerprint, content_hash,
+                      first_seen_at, last_event_at, removed_at, is_active,
+                      current_json, office, location, auction_type, lot_type,
+                      lot_name, lot_id, lot_items, auction_date, auction_time,
+                      petitioners, respondent, publish_text, auction_takes_place_at
+                    ) VALUES (
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        identity_key,
+                        fingerprint,
+                        content_hash,
+                        observed_at,
+                        observed_at,
+                        removed_at,
+                        int(was_present),
+                        serialized,
+                        fields["office"],
+                        fields["location"],
+                        fields["auctionType"],
+                        fields["lotType"],
+                        fields["lotName"],
+                        fields["lotId"],
+                        fields["lotItems"],
+                        fields["auctionDate"],
+                        fields["auctionTime"],
+                        fields["petitioners"],
+                        fields["respondent"],
+                        fields["publishText"],
+                        fields["auctionTakesPlaceAt"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO events(
+                      listing_id, event_type, reason, observed_at,
+                      auction_type, lot_name, lot_id, snapshot_json
+                    ) VALUES (?, 'added', 'first_seen', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cursor.lastrowid,
+                        observed_at,
+                        fields["auctionType"],
+                        fields["lotName"],
+                        fields["lotId"],
+                        serialized,
+                    ),
+                )
+
     def test_first_run_records_every_auction_type(self) -> None:
         result = self.update(
             "2026-08-21T09:00:00Z",
@@ -89,13 +223,113 @@ class UppbodHistoryTests(unittest.TestCase):
                 connection.execute("SELECT COUNT(*) FROM listings").fetchone()[0],
                 3,
             )
+            statuses = {
+                row["lot_id"]: row
+                for row in connection.execute(
+                    """
+                    SELECT lot_id, is_present, is_active, lifecycle_status
+                    FROM listing_current_status
+                    """
+                )
+            }
+            self.assertEqual(
+                (statuses["A-100"]["is_present"], statuses["A-100"]["is_active"]),
+                (1, 1),
+            )
+            self.assertEqual(statuses["A-100"]["lifecycle_status"], "active")
+            self.assertEqual(
+                (statuses["A-300"]["is_present"], statuses["A-300"]["is_active"]),
+                (1, 0),
+            )
+            self.assertEqual(statuses["A-300"]["lifecycle_status"], "finished")
 
         payload = json.loads((self.site_data / "history.json").read_text())
+        self.assertEqual(payload["version"], 2)
         self.assertEqual(payload["counts"]["listings"], 3)
+        self.assertEqual(payload["counts"]["active"], 2)
+        self.assertEqual(payload["counts"]["finished"], 1)
+        self.assertEqual(payload["counts"]["removed"], 0)
+        self.assertEqual(payload["counts"]["sourcePresent"], 3)
         self.assertEqual(
             {item["name"] for item in payload["auctionTypes"]},
             {"Byrjun uppboðs", "Framhald uppboðs", "Sölu lokið"},
         )
+
+        by_lot_id = {item["current"]["lotId"]: item for item in payload["listings"]}
+        self.assertEqual(by_lot_id["A-100"]["status"], "active")
+        self.assertTrue(by_lot_id["A-100"]["isActive"])
+        self.assertEqual(by_lot_id["A-300"]["status"], "finished")
+        self.assertFalse(by_lot_id["A-300"]["isActive"])
+        self.assertTrue(by_lot_id["A-300"]["isFinished"])
+        self.assertTrue(by_lot_id["A-300"]["sourcePresent"])
+
+    def test_finished_listing_becomes_removed_when_it_leaves_the_feed(self) -> None:
+        self.update("2026-08-21T09:00:00Z", [self.sold])
+        self.update("2026-08-21T09:15:00Z", [])
+
+        payload = json.loads((self.site_data / "history.json").read_text())
+        listing = payload["listings"][0]
+        self.assertEqual(listing["status"], "removed")
+        self.assertFalse(listing["isActive"])
+        self.assertFalse(listing["isFinished"])
+        self.assertFalse(listing["sourcePresent"])
+        self.assertEqual(payload["counts"]["active"], 0)
+        self.assertEqual(payload["counts"]["finished"], 0)
+        self.assertEqual(payload["counts"]["removed"], 1)
+
+    def test_v1_database_migrates_presence_and_finished_state_without_new_events(
+        self,
+    ) -> None:
+        removed_start = auction("A-400", "Hlíðarvegur 9", "Byrjun uppboðs")
+        self.create_v1_database(
+            [
+                (self.continuation, True, None),
+                (self.sold, True, None),
+                (removed_start, False, "2026-08-21T08:00:00Z"),
+            ]
+        )
+
+        result = self.update(
+            "2026-08-21T09:00:00Z",
+            [self.continuation, self.sold],
+        )
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(result["changedListings"], 0)
+        self.assertEqual(result["removed"], 0)
+
+        with self.connect() as connection:
+            self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 2)
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(listings)")
+            }
+            self.assertIn("is_present", columns)
+            states = {
+                row["lot_id"]: (row["is_present"], row["is_active"])
+                for row in connection.execute(
+                    "SELECT lot_id, is_present, is_active FROM listings"
+                )
+            }
+            self.assertEqual(states["A-200"], (1, 1))
+            self.assertEqual(states["A-300"], (1, 0))
+            self.assertEqual(states["A-400"], (0, 0))
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM events").fetchone()[0], 3)
+            self.assertEqual(
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'last_event_at'"
+                ).fetchone()[0],
+                "2026-08-21T08:00:00Z",
+            )
+
+        payload = json.loads((self.site_data / "history.json").read_text())
+        statuses = {
+            item["current"]["lotId"]: item["status"]
+            for item in payload["listings"]
+        }
+        self.assertEqual(statuses["A-200"], "active")
+        self.assertEqual(statuses["A-300"], "finished")
+        self.assertEqual(statuses["A-400"], "removed")
 
     def test_changed_fields_and_removal_are_stored_separately(self) -> None:
         self.update(
@@ -143,10 +377,22 @@ class UppbodHistoryTests(unittest.TestCase):
             )
 
             removed = connection.execute(
-                "SELECT is_active, removed_at FROM listings WHERE lot_id = 'A-200'"
+                """
+                SELECT is_present, is_active, removed_at
+                FROM listings WHERE lot_id = 'A-200'
+                """
             ).fetchone()
+            self.assertEqual(removed["is_present"], 0)
             self.assertEqual(removed["is_active"], 0)
             self.assertEqual(removed["removed_at"], "2026-08-21T09:15:00Z")
+
+            finished = connection.execute(
+                """
+                SELECT is_present, is_active
+                FROM listings WHERE lot_id = 'A-100'
+                """
+            ).fetchone()
+            self.assertEqual((finished["is_present"], finished["is_active"]), (1, 0))
 
     def test_unchanged_poll_does_not_rewrite_database_or_json(self) -> None:
         auctions = [self.start, self.continuation]
@@ -199,6 +445,7 @@ class UppbodHistoryTests(unittest.TestCase):
         self.assertIn("laugavegur 1", listing["searchText"])
         self.assertIn("laugavegur 1a", listing["searchText"])
         self.assertEqual(listing["events"][0]["type"], "changed")
+
 
 
 if __name__ == "__main__":

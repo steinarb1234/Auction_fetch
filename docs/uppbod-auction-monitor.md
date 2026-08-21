@@ -25,6 +25,7 @@ For every listing, the database stores:
 - its current or last-known full source snapshot;
 - the first time it was seen;
 - whether it is currently present in the feed;
+- whether its current auction is active or has reached `Sölu lokið`;
 - when it was removed;
 - every `added`, `changed`, and `removed` event;
 - the complete snapshot associated with each event;
@@ -41,7 +42,18 @@ The SQLite file contains these main tables:
 
 ### `listings`
 
-One row per known listing. It stores current values, first-seen and last-event timestamps, active/removed state, and the full current JSON snapshot.
+One row per known listing. It stores current values, first-seen and last-event
+timestamps, and the full current JSON snapshot. Its lifecycle columns are:
+
+- `is_present`: `1` while the listing is still returned by the source feed;
+- `is_active`: `1` only while the listing is present and its auction type is
+  not `Sölu lokið`;
+- `removed_at`: the time it most recently disappeared from the source feed.
+
+Schema version 2 automatically migrates an existing version 1 database by
+copying the old presence value into `is_present` and recalculating `is_active`
+from the latest stored auction type. Existing events and field changes are not
+rewritten.
 
 ### `events`
 
@@ -69,12 +81,26 @@ new_value
 
 A convenience SQL view joining listings, events, and changed fields.
 
+### `listing_current_status`
+
+A convenience SQL view exposing `lifecycle_status` as `active`, `finished`, or
+`removed`.
+
 Example queries:
 
 ```sql
 -- Find every listing whose name or lot ID contains a house number.
-SELECT id, lot_name, lot_id, auction_type, is_active, first_seen_at, removed_at
-FROM listings
+SELECT
+  id,
+  lot_name,
+  lot_id,
+  auction_type,
+  is_present,
+  is_active,
+  lifecycle_status,
+  first_seen_at,
+  removed_at
+FROM listing_current_status
 WHERE lot_name LIKE '%12%'
    OR lot_id LIKE '%12%'
 ORDER BY last_event_at DESC;
@@ -123,20 +149,37 @@ At deployment time the workflow combines those version-controlled assets with ge
 site/data/history.json
 site/data/summary.json
 site/data/uppbod-history.sqlite
+site/data/latest-fetch.json
 ```
+
+`latest-fetch.json` is added to each Pages deployment artifact after the
+history branch commit step; it is intentionally not stored on the history
+branch.
 
 The browser interface supports:
 
+- a top banner showing the timestamp of the latest successful source fetch;
 - free-text search across current and historical values;
 - address and house-number searches through `lotName`;
 - searches by lot ID, office, location, lot items, parties, and published text;
 - filtering by any auction type that has appeared;
-- filtering by active or removed status;
+- filtering by active, finished, or removed-from-feed state;
 - filtering for listings that have added, changed, or removed events;
 - sorting by latest event, first appearance, or address/listing name;
 - expandable per-listing timelines with field-by-field before/after values;
+- listing-title links that open a Google search for the current listing name;
 - direct SQLite database download;
 - shareable search URLs.
+
+- **Active** means the listing is still in the source feed and its current
+  auction type is not `Sölu lokið`.
+- **Finished** means the listing remains in the source feed but its current
+  auction type is `Sölu lokið`.
+- **Removed from feed** means it is no longer present in a successful source
+  response.
+
+The generated Pages export mirrors these states with `sourcePresent`,
+`isActive`, `isFinished`, and the three-state `status` field.
 
 The browser uses the generated JSON search index, while SQLite remains the canonical data store. This avoids shipping a browser WebAssembly SQL runtime and keeps the Pages site dependency-free.
 
@@ -158,6 +201,12 @@ An unchanged poll does not update timestamps in SQLite and does not rewrite JSON
 - a removed listing reappears;
 - site source assets change;
 - the database or export format is initialized or upgraded.
+
+The latest successful fetch timestamp is written to
+`site/data/latest-fetch.json` only after the history commit step. It is included
+in the Pages deployment artifact but is not committed to `uppbod-history`.
+This lets the banner update after every successful poll without creating a Git
+commit every 15 minutes.
 
 ## Existing notification behavior
 
@@ -242,14 +291,37 @@ In repository settings, set the Pages build and deployment source to **GitHub Ac
 
 The workflow uploads the generated `site/` directory and deploys it through the `github-pages` environment.
 
-### 3. Run the tests
+### 3. Use a URL that does not contain the GitHub account name
+
+GitHub's default Pages hostname always includes the owner name, for example:
+
+```text
+https://ACCOUNT.github.io/REPOSITORY/
+```
+
+To remove the account name from the public URL, configure a domain that you
+own, such as:
+
+```text
+https://uppbod.example.com/
+```
+
+In the repository, open **Settings → Pages**, enter the domain under **Custom
+domain**, and save it. Then create the corresponding DNS record at the domain
+provider. For a subdomain, create a `CNAME` record pointing to
+`ACCOUNT.github.io` without the repository path. Because this site is deployed
+with a custom GitHub Actions workflow, a repository `CNAME` file is neither
+required nor used. Enable **Enforce HTTPS** after GitHub has validated the DNS
+configuration.
+
+### 4. Run the tests
 
 ```bash
 node --test scripts/uppbod-auction-monitor.test.mjs
 python -m unittest -v scripts/uppbod_history_test.py
 ```
 
-### 4. Run the workflow manually
+### 5. Run the workflow manually
 
 After the files are on the default branch:
 
