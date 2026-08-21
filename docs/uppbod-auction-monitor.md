@@ -156,14 +156,14 @@ site/data/latest-fetch.json
 history branch commit step; it is intentionally not stored on the history
 branch.
 
-The browser interface supports:
+The browser interface is presented in Icelandic and supports:
 
-- a top banner showing the timestamp of the latest successful source fetch;
+- a latest-fetch panel in the same card as the SQLite download, directly above the download link;
 - free-text search across current and historical values;
 - address and house-number searches through `lotName`;
 - searches by lot ID, office, location, lot items, parties, and published text;
 - filtering by any auction type that has appeared;
-- filtering by active, finished, or removed-from-feed state;
+- filtering by active, `Sölu lokið`, or removed-from-feed state;
 - filtering for listings that have added, changed, or removed events;
 - sorting by latest event, first appearance, or address/listing name;
 - expandable per-listing timelines with field-by-field before/after values;
@@ -171,12 +171,13 @@ The browser interface supports:
 - direct SQLite database download;
 - shareable search URLs.
 
-- **Active** means the listing is still in the source feed and its current
+- **Virkt** means the listing is still in the source feed and its current
   auction type is not `Sölu lokið`.
-- **Finished** means the listing remains in the source feed but its current
-  auction type is `Sölu lokið`.
-- **Removed from feed** means it is no longer present in a successful source
-  response.
+- **Sölu lokið** means the listing remains in the source feed with that auction
+  type. The listing card shows only the `Sölu lokið` auction-type badge rather
+  than a second, duplicate lifecycle badge.
+- **Fjarlægt úr gagnastraumi** means the listing is no longer present in a
+  successful source response.
 
 The generated Pages export mirrors these states with `sourcePresent`,
 `isActive`, `isFinished`, and the three-state `status` field.
@@ -205,8 +206,8 @@ An unchanged poll does not update timestamps in SQLite and does not rewrite JSON
 The latest successful fetch timestamp is written to
 `site/data/latest-fetch.json` only after the history commit step. It is included
 in the Pages deployment artifact but is not committed to `uppbod-history`.
-This lets the banner update after every successful poll without creating a Git
-commit every 15 minutes.
+This lets the latest-fetch panel update after every successful poll without
+creating a Git commit every 15 minutes.
 
 ## Existing notification behavior
 

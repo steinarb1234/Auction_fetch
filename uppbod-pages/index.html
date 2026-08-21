@@ -1,65 +1,66 @@
 <!doctype html>
-<html lang="en">
+<html lang="is">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Search the historical Ísland.is Uppboð auction feed and inspect added, changed, and removed events for every listing."
+      content="Leitaðu í sögu uppboða frá Ísland.is og skoðaðu hvenær skráningum var bætt við, breytt eða þær fjarlægðar."
     />
     <meta name="color-scheme" content="light dark" />
-    <title>Uppboð auction history</title>
+    <title>Saga uppboða</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="fetch-banner" role="status" aria-live="polite">
-      <div class="shell fetch-banner__inner">
-        <span>Latest successful source fetch</span>
-        <strong>
-          <time id="latest-fetch" datetime="">Loading…</time>
-        </strong>
-        <span id="latest-source-count" class="fetch-banner__count"></span>
-      </div>
-    </div>
-
     <header class="hero">
       <div class="shell hero__inner">
         <div>
-          <p class="eyebrow">Ísland.is auction feed archive</p>
-          <h1>Uppboð auction history</h1>
+          <p class="eyebrow">Safn uppboðsgagna frá Ísland.is</p>
+          <h1>Saga uppboða</h1>
           <p class="hero__intro">
-            Search every auction type by address, house number, lot ID, location,
-            party, or published text. Open a listing to see when it was added,
-            exactly what changed, and when it disappeared from the source feed.
+            Leitaðu í öllum uppboðstegundum eftir heimilisfangi, húsnúmeri,
+            auðkenni, staðsetningu, aðila eða birtingartexta. Opnaðu skráningu
+            til að sjá hvenær henni var bætt við, nákvæmlega hverju var breytt
+            og hvenær hún hvarf úr gagnastraumnum.
           </p>
         </div>
-        <a class="database-link" href="data/uppbod-history.sqlite" download>
-          <span>Download SQLite database</span>
-          <small id="database-size">Loading database details…</small>
-        </a>
+
+        <aside class="database-panel" aria-label="Síðasta gagnasöfnun og niðurhal">
+          <div class="latest-fetch-card" role="status" aria-live="polite">
+            <span>Síðast sótt</span>
+            <strong>
+              <time id="latest-fetch" datetime="">Hleður…</time>
+            </strong>
+            <small id="latest-source-count"></small>
+          </div>
+          <a class="database-link" href="data/uppbod-history.sqlite" download>
+            <span>Sækja SQLite-gagnagrunn</span>
+            <small id="database-size">Hleður upplýsingum um gagnagrunn…</small>
+          </a>
+        </aside>
       </div>
     </header>
 
     <main class="shell">
-      <section class="summary" aria-label="Archive summary">
+      <section class="summary" aria-label="Samantekt safns">
         <article class="summary-card">
-          <span>Listings</span>
+          <span>Skráningar</span>
           <strong id="summary-listings">—</strong>
         </article>
         <article class="summary-card">
-          <span>Active now</span>
+          <span>Virkar núna</span>
           <strong id="summary-active">—</strong>
         </article>
         <article class="summary-card">
-          <span>Finished</span>
+          <span>Sölu lokið</span>
           <strong id="summary-finished">—</strong>
         </article>
         <article class="summary-card">
-          <span>Removed from feed</span>
+          <span>Fjarlægðar úr gagnastraumi</span>
           <strong id="summary-removed">—</strong>
         </article>
         <article class="summary-card">
-          <span>Recorded events</span>
+          <span>Skráðir atburðir</span>
           <strong id="summary-events">—</strong>
         </article>
       </section>
@@ -67,115 +68,119 @@
       <section class="search-panel" aria-labelledby="search-heading">
         <div class="search-panel__heading">
           <div>
-            <p class="eyebrow">Search archive</p>
-            <h2 id="search-heading">Find a property or auction</h2>
+            <p class="eyebrow">Leita í safni</p>
+            <h2 id="search-heading">Finna eign eða uppboð</h2>
           </div>
-          <p id="archive-updated" class="updated">Loading history…</p>
+          <p id="archive-updated" class="updated">Hleður sögu…</p>
         </div>
 
         <div class="filters">
           <label class="field field--search">
-            <span>Address, house number, lot ID, or text</span>
+            <span>Heimilisfang, húsnúmer, auðkenni eða texti</span>
             <input
               id="query"
               type="search"
               inputmode="search"
               autocomplete="off"
-              placeholder="For example: Laugavegur 12 or A-100"
+              placeholder="Til dæmis: Laugavegur 12 eða A-100"
             />
           </label>
 
           <label class="field">
-            <span>Auction type at any time</span>
+            <span>Uppboðstegund hvenær sem er</span>
             <select id="auction-type">
-              <option value="">All auction types</option>
+              <option value="">Allar uppboðstegundir</option>
             </select>
           </label>
 
           <label class="field">
-            <span>Current state</span>
+            <span>Núverandi staða</span>
             <select id="status">
-              <option value="">All states</option>
-              <option value="active">Active</option>
-              <option value="finished">Finished — Sölu lokið</option>
-              <option value="removed">Removed from feed</option>
+              <option value="">Allar stöður</option>
+              <option value="active">Virkt</option>
+              <option value="finished">Sölu lokið</option>
+              <option value="removed">Fjarlægt úr gagnastraumi</option>
             </select>
           </label>
 
           <label class="field">
-            <span>History contains</span>
+            <span>Sagan inniheldur</span>
             <select id="event-type">
-              <option value="">Any event</option>
-              <option value="added">Added event</option>
-              <option value="changed">Changed event</option>
-              <option value="removed">Removed event</option>
+              <option value="">Hvaða atburð sem er</option>
+              <option value="added">Bætt við</option>
+              <option value="changed">Breytt</option>
+              <option value="removed">Fjarlægt</option>
             </select>
           </label>
 
           <label class="field">
-            <span>Sort by</span>
+            <span>Raða eftir</span>
             <select id="sort">
-              <option value="latest">Latest event</option>
-              <option value="first-seen">First seen</option>
-              <option value="address">Address / listing name</option>
+              <option value="latest">Nýjasta atburði</option>
+              <option value="first-seen">Fyrst séð</option>
+              <option value="address">Heimilisfangi / heiti</option>
             </select>
           </label>
         </div>
 
         <div class="filter-actions">
           <button id="clear-filters" class="button button--quiet" type="button">
-            Clear filters
+            Hreinsa síur
           </button>
-          <button id="copy-link" class="button" type="button">Copy search link</button>
+          <button id="copy-link" class="button" type="button">
+            Afrita leitartengil
+          </button>
         </div>
       </section>
 
       <section class="results-section" aria-labelledby="results-heading">
         <div class="results-heading">
           <div>
-            <p class="eyebrow">Results</p>
-            <h2 id="results-heading">Auction listings</h2>
+            <p class="eyebrow">Niðurstöður</p>
+            <h2 id="results-heading">Uppboðsskráningar</h2>
           </div>
-          <p id="result-count" aria-live="polite">Loading…</p>
+          <p id="result-count" aria-live="polite">Hleður…</p>
         </div>
 
         <div id="load-error" class="notice notice--error" hidden></div>
         <div id="empty-state" class="notice" hidden>
-          No listings match this search. Try fewer words or remove a filter.
+          Engar skráningar passa við leitina. Prófaðu færri leitarorð eða
+          fjarlægðu síu.
         </div>
         <div id="results" class="results" aria-live="polite"></div>
         <div class="show-more-wrap">
           <button id="show-more" class="button" type="button" hidden>
-            Show more listings
+            Sýna fleiri skráningar
           </button>
         </div>
       </section>
 
       <section class="about" aria-labelledby="about-heading">
         <div>
-          <p class="eyebrow">Data model</p>
-          <h2 id="about-heading">What is retained</h2>
+          <p class="eyebrow">Gagnalíkan</p>
+          <h2 id="about-heading">Hvað er varðveitt</h2>
         </div>
         <p>
-          The SQLite file is the canonical archive. It stores one listing record,
-          an event timeline, full snapshots, and separate old/new values for every
-          changed field. All auction types are retained; the narrower GitHub issue
-          notification rules do not filter this archive.
+          SQLite-skráin er aðalsafnið. Hún geymir eina færslu fyrir hverja
+          skráningu, atburðaferil, heildarmyndir og aðskilin eldri og ný gildi
+          fyrir hvern breyttan reit. Allar uppboðstegundir eru varðveittar;
+          þrengri reglur GitHub-tilkynninga sía þetta safn ekki.
         </p>
       </section>
     </main>
 
     <footer class="footer">
       <div class="shell footer__inner">
-        <span>Generated automatically from the public Uppboð GraphQL feed.</span>
-        <a href="data/summary.json">Machine-readable summary</a>
+        <span>Búið til sjálfvirkt úr opinberum GraphQL-gagnastraumi Uppboða.</span>
+        <a href="data/summary.json">Véllesanleg samantekt</a>
       </div>
     </footer>
 
     <noscript>
       <div class="shell notice notice--error">
-        JavaScript is required for the browser search. The SQLite database remains
-        available from the download link above.
+        JavaScript þarf að vera virkt til að leitin virki í vafra.
+        SQLite-gagnagrunnurinn er áfram aðgengilegur í niðurhalshlekknum hér að
+        ofan.
       </div>
     </noscript>
     <script type="module" src="app.js"></script>
