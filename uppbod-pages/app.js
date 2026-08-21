@@ -128,12 +128,12 @@ function text(value, fallback = '—') {
 
 function listingCountText(count) {
   const formatted = formatNumber(count)
-  return count === 1 ? `${formatted} virkt uppboð` : `${formatted} virk uppboð`
+  return count === 1 ? `${formatted} uppboð` : `${formatted} uppboð`
 }
 
 function additionalListingCountText(count) {
   const formatted = formatNumber(count)
-  return count === 1 ? `${formatted} virkt uppboð` : `${formatted} virk uppboð`
+  return count === 1 ? `${formatted} uppboð` : `${formatted} uppboð`
 }
 
 function eventCountText(count) {
@@ -459,7 +459,7 @@ function populateLatestFetch(fetchStatus, archive) {
 
   const sourceCount = Number(fetchStatus?.sourceCount)
   elements.latestSourceCount.textContent = Number.isFinite(sourceCount)
-    ? `${listingCountText(sourceCount)} í gagnagrunni`
+    ? `${listingCountText(sourceCount)}`
     : ''
 }
 
