@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Leitaðu í sögu uppboða frá Ísland.is og skoðaðu hvenær skráningum var bætt við, breytt eða þær fjarlægðar."
+      content="Leitaðu í uppboðum frá Ísland.is og skoðaðu hvenær skráningum var bætt við, breytt eða þær fjarlægðar."
     />
     <meta name="color-scheme" content="light dark" />
-    <title>Saga uppboða</title>
+    <title>Uppboðsskrá</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -16,12 +16,12 @@
       <div class="shell hero__inner">
         <div>
           <p class="eyebrow">Safn uppboðsgagna frá Ísland.is</p>
-          <h1>Saga uppboða</h1>
+          <h1>Uppboðsskrá</h1>
           <p class="hero__intro">
-            Leitaðu í öllum uppboðstegundum eftir heimilisfangi, húsnúmeri,
-            auðkenni, staðsetningu, aðila eða birtingartexta. Opnaðu skráningu
-            til að sjá hvenær henni var bætt við, nákvæmlega hverju var breytt
-            og hvenær hún hvarf úr gagnastraumnum.
+            Leitaðu í öllum uppboðum eftir heimilisfangi, húsnúmeri,
+            auðkenni, staðsetningu, aðila eða lýsingu. Opnaðu uppboð
+            til að sjá hvenær því var bætt við, nákvæmlega hverju var breytt
+            og hvenær það var fjarlægt.
           </p>
         </div>
 
@@ -48,7 +48,7 @@
           <strong id="summary-listings">—</strong>
         </article>
         <article class="summary-card">
-          <span>Virkar núna</span>
+          <span>Virk uppboð</span>
           <strong id="summary-active">—</strong>
         </article>
         <article class="summary-card">
@@ -56,12 +56,8 @@
           <strong id="summary-finished">—</strong>
         </article>
         <article class="summary-card">
-          <span>Fjarlægðar úr gagnastraumi</span>
+          <span>Fjarlægð</span>
           <strong id="summary-removed">—</strong>
-        </article>
-        <article class="summary-card">
-          <span>Skráðir atburðir</span>
-          <strong id="summary-events">—</strong>
         </article>
       </section>
 
@@ -69,7 +65,7 @@
         <div class="search-panel__heading">
           <div>
             <p class="eyebrow">Leita í safni</p>
-            <h2 id="search-heading">Finna eign eða uppboð</h2>
+            <h2 id="search-heading">Finndu eign eða uppboð</h2>
           </div>
           <p id="archive-updated" class="updated">Hleður sögu…</p>
         </div>
@@ -99,7 +95,7 @@
               <option value="">Allar stöður</option>
               <option value="active">Virkt</option>
               <option value="finished">Sölu lokið</option>
-              <option value="removed">Fjarlægt úr gagnastraumi</option>
+              <option value="removed">Fjarlægt</option>
             </select>
           </label>
 
@@ -137,7 +133,7 @@
         <div class="results-heading">
           <div>
             <p class="eyebrow">Niðurstöður</p>
-            <h2 id="results-heading">Uppboðsskráningar</h2>
+            <h2 id="results-heading">Uppboð</h2>
           </div>
           <p id="result-count" aria-live="polite">Hleður…</p>
         </div>
@@ -171,7 +167,7 @@
 
     <footer class="footer">
       <div class="shell footer__inner">
-        <span>Búið til sjálfvirkt úr opinberum GraphQL-gagnastraumi Uppboða.</span>
+        <span>Búið til sjálfvirkt úr opinberum GraphQL-gagnagrunni Uppboða.</span>
         <a href="data/summary.json">Véllesanleg samantekt</a>
       </div>
     </footer>

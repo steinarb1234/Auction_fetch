@@ -24,10 +24,10 @@ const EVENT_LABELS = {
 }
 
 const REASON_LABELS = {
-  first_seen: 'Fyrst séð í gagnastraumi',
+  first_seen: 'Fyrst séð í gagnagrunni',
   reappeared: 'Birtist aftur eftir að hafa verið fjarlægt',
-  source_update: 'Upplýsingum breytt í gagnastraumi',
-  missing_from_feed: 'Vantar í gagnastraum',
+  source_update: 'Upplýsingum breytt í gagnagrunni',
+  missing_from_feed: 'Vantar í gagnagrunn',
 }
 
 const state = {
@@ -129,17 +129,17 @@ function text(value, fallback = '—') {
 
 function listingCountText(count) {
   const formatted = formatNumber(count)
-  return count === 1 ? `${formatted} skráning` : `${formatted} skráningar`
+  return count === 1 ? `${formatted} virkt uppboð` : `${formatted} virk uppboð`
 }
 
 function additionalListingCountText(count) {
   const formatted = formatNumber(count)
-  return count === 1 ? `${formatted} skráningu` : `${formatted} skráningar`
+  return count === 1 ? `${formatted} virkt uppboð` : `${formatted} virk uppboð`
 }
 
 function eventCountText(count) {
   const formatted = formatNumber(count)
-  return count === 1 ? `${formatted} atburður` : `${formatted} atburðir`
+  return count === 1 ? `${formatted} breyting` : `${formatted} breytingar`
 }
 
 function isFinishedAuctionType(value) {
@@ -366,10 +366,10 @@ function listingCard(listing) {
       currentItem(
         'Núverandi staða',
         currentState.key === 'active'
-          ? 'Virkt — til staðar í gagnastraumi'
+          ? 'Virkt — til staðar í gagnagrunni'
           : currentState.key === 'finished'
             ? SOLD_AUCTION_TYPE
-            : `Fjarlægt úr gagnastraumi ${formatDate(listing.removedAt)}`,
+            : `Fjarlægt úr gagnagrunni ${formatDate(listing.removedAt)}`,
       ),
       currentItem('Tegund eignar', current.lotType),
       currentItem('Staðsetning', currentLocation(listing)),
@@ -433,7 +433,7 @@ function populateArchive(archive) {
   )
   elements.summaryEvents.textContent = formatNumber(counts.events)
   elements.updated.textContent = archive.generatedAt
-    ? `Síðasta skráða breyting: ${formatDate(archive.generatedAt)}`
+    ? `Síðasta breyting: ${formatDate(archive.generatedAt)}`
     : 'Engir uppboðsatburðir hafa verið skráðir'
   elements.databaseSize.textContent = `${formatBytes(archive.database?.sizeBytes)} · gagnagrunnssnið v${archive.database?.schemaVersion ?? '—'}`
 
@@ -461,7 +461,7 @@ function populateLatestFetch(fetchStatus, archive) {
 
   const sourceCount = Number(fetchStatus?.sourceCount)
   elements.latestSourceCount.textContent = Number.isFinite(sourceCount)
-    ? `${listingCountText(sourceCount)} í gagnastraumi`
+    ? `${listingCountText(sourceCount)} í gagnagrunni`
     : ''
 }
 
