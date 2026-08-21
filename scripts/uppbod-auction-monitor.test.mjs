@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
 
 import {
@@ -12,8 +15,10 @@ import {
   hasChanges,
   renderChangeComment,
   renderIssueBody,
+  readAuctionExport,
   runMonitor,
 } from './uppbod-auction-monitor.mjs'
+import { createAuctionExport } from './uppbod-fetch-auctions.mjs'
 
 const continuationAuction = {
   office: 'Sýslumaðurinn á höfuðborgarsvæðinu',
@@ -130,6 +135,63 @@ function createHarness({ auctions, existingIssue = null }) {
     },
   }
 }
+
+test('auction export preserves every auction type and its fetch timestamp', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'uppbod-export-'))
+  const outputPath = join(directory, 'auctions.json')
+
+  try {
+    const result = await createAuctionExport({
+      outputPath,
+      now: new Date('2026-08-21T09:00:00.000Z'),
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            data: {
+              getSyslumennAuctions: [
+                continuationAuction,
+                soldAuction,
+                startAuction,
+              ],
+            },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    })
+
+    assert.equal(result.sourceCount, 3)
+    const payload = JSON.parse(await readFile(outputPath, 'utf8'))
+    assert.equal(payload.fetchedAt, '2026-08-21T09:00:00.000Z')
+    assert.deepEqual(
+      payload.auctions.map(({ auctionType }) => auctionType).sort(),
+      [
+        AUCTION_TYPES.START,
+        AUCTION_TYPES.CONTINUATION,
+        AUCTION_TYPES.SOLD,
+      ].sort(),
+    )
+
+    const loaded = await readAuctionExport(outputPath)
+    assert.equal(loaded.fetchedAt, payload.fetchedAt)
+    assert.equal(loaded.auctions.length, 3)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
+test('auction export reader accepts a plain array for manual backfills', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'uppbod-export-array-'))
+  const outputPath = join(directory, 'auctions.json')
+
+  try {
+    await writeFile(outputPath, JSON.stringify([startAuction]), 'utf8')
+    const loaded = await readAuctionExport(outputPath)
+    assert.equal(loaded.fetchedAt, null)
+    assert.deepEqual(loaded.auctions, [startAuction])
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
 
 test('auction fetch uses a JSON POST request', async () => {
   let capturedRequest
@@ -384,6 +446,40 @@ test('tracks auction type changes when the source record has no lot ID', () => {
   assert.deepEqual(diff.changed[0].fields.map(({ field }) => field), [
     'auctionType',
   ])
+})
+
+test('scheduled monitor can consume the shared auction export without refetching', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'uppbod-monitor-input-'))
+  const inputPath = join(directory, 'auctions.json')
+  const harness = createHarness({ auctions: [] })
+
+  try {
+    await writeFile(
+      inputPath,
+      JSON.stringify({
+        version: 1,
+        fetchedAt: '2026-08-21T09:07:00.000Z',
+        auctions: [continuationAuction, startAuction],
+      }),
+      'utf8',
+    )
+
+    const result = await runMonitor({
+      env: { ...harness.env, AUCTION_INPUT_PATH: inputPath },
+      fetchImpl: async (input, options) => {
+        const url = new URL(input)
+        assert.notEqual(url.hostname, 'island.is')
+        return harness.fetchImpl(input, options)
+      },
+      now: new Date('2026-08-21T10:00:00.000Z'),
+    })
+
+    assert.equal(result.status, 'baseline-created')
+    assert.equal(result.sourceAuctionCount, 2)
+    assert.match(harness.getIssue().body, /2026-08-21T09:07:00.000Z/)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
 })
 
 test('scheduled monitor reports a type change and then a true removal', async () => {

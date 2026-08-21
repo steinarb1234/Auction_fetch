@@ -1,4 +1,4 @@
-name: Uppboð auction change monitor
+name: Uppboð auction monitor and history
 
 on:
   schedule:
@@ -12,34 +12,169 @@ concurrency:
   group: uppbod-auction-monitor
   cancel-in-progress: false
 
-permissions:
-  contents: read
-  issues: write
+env:
+  HISTORY_BRANCH: uppbod-history
 
 jobs:
-  report-auction-changes:
-    name: Fetch and report auction changes
+  collect:
+    name: Collect auctions and build history site
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pages: write
+    outputs:
+      pages_ready: ${{ steps.pages_ready.outputs.ready }}
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
         with:
-          persist-credentials: false
+          fetch-depth: 0
+          persist-credentials: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v6
         with:
           node-version: '22.22.3'
           package-manager-cache: false
 
-      - name: Monitor Uppboð auctions
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Fetch all Uppboð auctions once
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional overrides:
+          AUCTION_OUTPUT_PATH: ${{ runner.temp }}/uppbod-auctions.json
+          # Optional override:
           # AUCTION_ENDPOINT: https://island.is/api/graphql
+        run: node scripts/uppbod-fetch-auctions.mjs
+
+      - name: Prepare persistent history branch
+        id: history
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          history_dir="${RUNNER_TEMP}/uppbod-history"
+          rm -rf "$history_dir"
+
+          if git ls-remote --exit-code --heads origin "$HISTORY_BRANCH" >/dev/null 2>&1; then
+            git fetch --no-tags origin \
+              "$HISTORY_BRANCH:refs/remotes/origin/$HISTORY_BRANCH"
+            git worktree add --detach "$history_dir" \
+              "refs/remotes/origin/$HISTORY_BRANCH"
+          else
+            git worktree add --detach "$history_dir" HEAD
+            git -C "$history_dir" switch --orphan uppbod-history-initial
+            git -C "$history_dir" rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          mkdir -p "$history_dir/site/data"
+
+          # Replace versioned site assets while preserving the persistent data.
+          find "$history_dir/site" -mindepth 1 -maxdepth 1 \
+            ! -name data -exec rm -rf {} +
+          cp -R "$GITHUB_WORKSPACE/uppbod-pages/." "$history_dir/site/"
+
+          cat > "$history_dir/README.md" <<'EOF'
+          # Uppboð history data branch
+
+          This branch is maintained by the scheduled Uppboð workflow.
+
+          - `site/data/uppbod-history.sqlite` is the canonical SQLite archive.
+          - `site/data/history.json` powers the GitHub Pages search interface.
+          - `site/` is the exact directory deployed to GitHub Pages.
+
+          Do not edit generated data manually. Source code and workflow changes
+          belong on the repository's default branch.
+          EOF
+
+          echo "path=$history_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Update SQLite history for every auction type
+        env:
+          HISTORY_DIR: ${{ steps.history.outputs.path }}
+        run: |
+          set -euo pipefail
+          python scripts/uppbod-history.py \
+            --input "$RUNNER_TEMP/uppbod-auctions.json" \
+            --database "$HISTORY_DIR/site/data/uppbod-history.sqlite" \
+            --site-data-dir "$HISTORY_DIR/site/data" \
+            | tee "$RUNNER_TEMP/uppbod-history-result.json"
+
+      - name: Report selected auction changes in the GitHub issue
+        id: report
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          AUCTION_INPUT_PATH: ${{ runner.temp }}/uppbod-auctions.json
+          # Optional overrides:
           # REPORT_REPOSITORY: owner/repository
           # MAX_REPORT_ROWS: '150'
           # MAX_CHANGE_ITEMS: '50'
         run: node scripts/uppbod-auction-monitor.mjs
+
+      - name: Commit changed history data
+        id: commit_history
+        env:
+          HISTORY_DIR: ${{ steps.history.outputs.path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git -C "$HISTORY_DIR" config user.name "github-actions[bot]"
+          git -C "$HISTORY_DIR" config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+          git -C "$HISTORY_DIR" add -- README.md site
+
+          if git -C "$HISTORY_DIR" diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No auction history changes to commit."
+          else
+            observed_at=$(python -c \
+              'import json,sys; print(json.load(open(sys.argv[1]))["observedAt"])' \
+              "$RUNNER_TEMP/uppbod-history-result.json")
+            git -C "$HISTORY_DIR" commit \
+              -m "data: update Uppboð history ${observed_at}"
+            git -C "$HISTORY_DIR" push origin "HEAD:${HISTORY_BRANCH}"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ${{ steps.history.outputs.path }}/site
+
+      - name: Mark Pages artifact ready
+        id: pages_ready
+        run: echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fail after preserving history when issue reporting failed
+        if: steps.report.outcome == 'failure'
+        run: |
+          echo "Auction history was saved, but the GitHub issue report failed." >&2
+          exit 1
+
+  deploy-pages:
+    name: Deploy searchable auction history
+    needs: collect
+    if: always() && needs.collect.outputs.pages_ready == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy GitHub Pages site
+        id: deployment
+        uses: actions/deploy-pages@v5

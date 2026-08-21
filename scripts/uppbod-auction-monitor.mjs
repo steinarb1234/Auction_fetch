@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { appendFile } from 'node:fs/promises'
+import { appendFile, readFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync, gzipSync } from 'node:zlib'
 
@@ -532,6 +532,32 @@ function shouldRetryAuctionError(error) {
   )
 }
 
+export async function readAuctionExport(filePath) {
+  const text = await readFile(filePath, 'utf8')
+  let payload
+
+  try {
+    payload = JSON.parse(text)
+  } catch (error) {
+    throw new Error(`Could not parse auction export ${filePath}: ${error.message}`)
+  }
+
+  const auctions = Array.isArray(payload) ? payload : payload?.auctions
+  if (!Array.isArray(auctions)) {
+    throw new Error(
+      `Auction export ${filePath} must be an array or an object with an auctions array`,
+    )
+  }
+
+  const fetchedAt =
+    typeof payload?.fetchedAt === 'string' &&
+    Number.isFinite(Date.parse(payload.fetchedAt))
+      ? payload.fetchedAt
+      : null
+
+  return { auctions, fetchedAt }
+}
+
 export async function fetchAuctions({
   endpoint = process.env.AUCTION_ENDPOINT || AUCTION_ENDPOINT,
   fetchImpl = fetch,
@@ -831,11 +857,18 @@ export async function runMonitor({
     repositoryPath: repositoryApiPath(repository),
   }
 
-  const rawAuctions = await fetchAuctions({
-    endpoint: env.AUCTION_ENDPOINT || AUCTION_ENDPOINT,
-    fetchImpl,
-  })
-  const fullCurrentSnapshot = buildSnapshot(rawAuctions, now.toISOString())
+  const auctionExport = env.AUCTION_INPUT_PATH
+    ? await readAuctionExport(env.AUCTION_INPUT_PATH)
+    : {
+        auctions: await fetchAuctions({
+          endpoint: env.AUCTION_ENDPOINT || AUCTION_ENDPOINT,
+          fetchImpl,
+        }),
+        fetchedAt: null,
+      }
+  const rawAuctions = auctionExport.auctions
+  const observedAt = auctionExport.fetchedAt || now.toISOString()
+  const fullCurrentSnapshot = buildSnapshot(rawAuctions, observedAt)
   const currentSnapshot = filterMonitoredSnapshot(fullCurrentSnapshot)
 
   await ensureMonitorLabel(github)
