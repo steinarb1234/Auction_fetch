@@ -12,6 +12,16 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div class="fetch-banner" role="status" aria-live="polite">
+      <div class="shell fetch-banner__inner">
+        <span>Latest successful source fetch</span>
+        <strong>
+          <time id="latest-fetch" datetime="">Loading…</time>
+        </strong>
+        <span id="latest-source-count" class="fetch-banner__count"></span>
+      </div>
+    </div>
+
     <header class="hero">
       <div class="shell hero__inner">
         <div>
@@ -41,7 +51,11 @@
           <strong id="summary-active">—</strong>
         </article>
         <article class="summary-card">
-          <span>Removed</span>
+          <span>Finished</span>
+          <strong id="summary-finished">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>Removed from feed</span>
           <strong id="summary-removed">—</strong>
         </article>
         <article class="summary-card">
@@ -79,11 +93,12 @@
           </label>
 
           <label class="field">
-            <span>Current status</span>
+            <span>Current state</span>
             <select id="status">
-              <option value="">Active and removed</option>
+              <option value="">All states</option>
               <option value="active">Active</option>
-              <option value="removed">Removed</option>
+              <option value="finished">Finished — Sölu lokið</option>
+              <option value="removed">Removed from feed</option>
             </select>
           </label>
 
