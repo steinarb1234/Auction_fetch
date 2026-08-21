@@ -176,7 +176,7 @@ The browser interface is presented in Icelandic and supports:
 - **Sölu lokið** means the listing remains in the source feed with that auction
   type. The listing card shows only the `Sölu lokið` auction-type badge rather
   than a second, duplicate lifecycle badge.
-- **Fjarlægt úr gagnastraumi** means the listing is no longer present in a
+- **Fjarlægt úr gagnagrunni** means the listing is no longer present in a
   successful source response.
 
 The generated Pages export mirrors these states with `sourcePresent`,
