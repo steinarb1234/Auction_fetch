@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Search the historical Ísland.is Uppboð auction feed and inspect added, changed, and removed events for every listing."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <title>Uppboð auction history</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div class="shell hero__inner">
+        <div>
+          <p class="eyebrow">Ísland.is auction feed archive</p>
+          <h1>Uppboð auction history</h1>
+          <p class="hero__intro">
+            Search every auction type by address, house number, lot ID, location,
+            party, or published text. Open a listing to see when it was added,
+            exactly what changed, and when it disappeared from the source feed.
+          </p>
+        </div>
+        <a class="database-link" href="data/uppbod-history.sqlite" download>
+          <span>Download SQLite database</span>
+          <small id="database-size">Loading database details…</small>
+        </a>
+      </div>
+    </header>
+
+    <main class="shell">
+      <section class="summary" aria-label="Archive summary">
+        <article class="summary-card">
+          <span>Listings</span>
+          <strong id="summary-listings">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>Active now</span>
+          <strong id="summary-active">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>Removed</span>
+          <strong id="summary-removed">—</strong>
+        </article>
+        <article class="summary-card">
+          <span>Recorded events</span>
+          <strong id="summary-events">—</strong>
+        </article>
+      </section>
+
+      <section class="search-panel" aria-labelledby="search-heading">
+        <div class="search-panel__heading">
+          <div>
+            <p class="eyebrow">Search archive</p>
+            <h2 id="search-heading">Find a property or auction</h2>
+          </div>
+          <p id="archive-updated" class="updated">Loading history…</p>
+        </div>
+
+        <div class="filters">
+          <label class="field field--search">
+            <span>Address, house number, lot ID, or text</span>
+            <input
+              id="query"
+              type="search"
+              inputmode="search"
+              autocomplete="off"
+              placeholder="For example: Laugavegur 12 or A-100"
+            />
+          </label>
+
+          <label class="field">
+            <span>Auction type at any time</span>
+            <select id="auction-type">
+              <option value="">All auction types</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Current status</span>
+            <select id="status">
+              <option value="">Active and removed</option>
+              <option value="active">Active</option>
+              <option value="removed">Removed</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>History contains</span>
+            <select id="event-type">
+              <option value="">Any event</option>
+              <option value="added">Added event</option>
+              <option value="changed">Changed event</option>
+              <option value="removed">Removed event</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>Sort by</span>
+            <select id="sort">
+              <option value="latest">Latest event</option>
+              <option value="first-seen">First seen</option>
+              <option value="address">Address / listing name</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="filter-actions">
+          <button id="clear-filters" class="button button--quiet" type="button">
+            Clear filters
+          </button>
+          <button id="copy-link" class="button" type="button">Copy search link</button>
+        </div>
+      </section>
+
+      <section class="results-section" aria-labelledby="results-heading">
+        <div class="results-heading">
+          <div>
+            <p class="eyebrow">Results</p>
+            <h2 id="results-heading">Auction listings</h2>
+          </div>
+          <p id="result-count" aria-live="polite">Loading…</p>
+        </div>
+
+        <div id="load-error" class="notice notice--error" hidden></div>
+        <div id="empty-state" class="notice" hidden>
+          No listings match this search. Try fewer words or remove a filter.
+        </div>
+        <div id="results" class="results" aria-live="polite"></div>
+        <div class="show-more-wrap">
+          <button id="show-more" class="button" type="button" hidden>
+            Show more listings
+          </button>
+        </div>
+      </section>
+
+      <section class="about" aria-labelledby="about-heading">
+        <div>
+          <p class="eyebrow">Data model</p>
+          <h2 id="about-heading">What is retained</h2>
+        </div>
+        <p>
+          The SQLite file is the canonical archive. It stores one listing record,
+          an event timeline, full snapshots, and separate old/new values for every
+          changed field. All auction types are retained; the narrower GitHub issue
+          notification rules do not filter this archive.
+        </p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="shell footer__inner">
+        <span>Generated automatically from the public Uppboð GraphQL feed.</span>
+        <a href="data/summary.json">Machine-readable summary</a>
+      </div>
+    </footer>
+
+    <noscript>
+      <div class="shell notice notice--error">
+        JavaScript is required for the browser search. The SQLite database remains
+        available from the download link above.
+      </div>
+    </noscript>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
