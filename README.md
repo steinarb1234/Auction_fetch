@@ -2,6 +2,8 @@
 
 This bundle adds a scheduled GitHub Action that fetches `getSyslumennAuctions` from the public Ísland.is GraphQL endpoint and reports changes in one GitHub issue.
 
+Interactive page: [Uppboðsvaktin](https://steinarb1234.github.io/Auction_fetch/)
+
 ## Behavior
 
 - Runs every 15 minutes at `:07`, `:22`, `:37`, and `:52` in `Atlantic/Reykjavik`.
