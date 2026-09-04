@@ -5,11 +5,11 @@
       "name": "Byrjun uppboðs"
     },
     {
-      "eventCount": 13,
+      "eventCount": 20,
       "name": "Framhald uppboðs"
     },
     {
-      "eventCount": 21,
+      "eventCount": 24,
       "name": "Lausafjáruppboð"
     },
     {
@@ -18,22 +18,22 @@
     }
   ],
   "counts": {
-    "active": 19,
-    "addedEvents": 68,
+    "active": 23,
+    "addedEvents": 75,
     "changedEvents": 16,
-    "events": 118,
+    "events": 128,
     "finished": 15,
-    "listings": 66,
-    "removed": 32,
-    "removedEvents": 34,
-    "sourcePresent": 34
+    "listings": 73,
+    "removed": 35,
+    "removedEvents": 37,
+    "sourcePresent": 38
   },
   "database": {
     "filename": "uppbod-history.sqlite",
     "schemaVersion": 2,
-    "sha256": "1570efb4f566fec38bf59c446e308a2e82a225d11e6209ac434d511321657214",
-    "sizeBytes": 249856
+    "sha256": "04769daa4a9b32e9f7e263c31a12df7956a4d7f267f765f0ba5e59b195a6a71b",
+    "sizeBytes": 266240
   },
-  "generatedAt": "2026-09-03T18:47:22.969000Z",
+  "generatedAt": "2026-09-04T01:20:25.287000Z",
   "version": 2
 }
