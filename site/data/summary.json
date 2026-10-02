@@ -13,27 +13,27 @@
       "name": "Lausafjáruppboð"
     },
     {
-      "eventCount": 49,
+      "eventCount": 50,
       "name": "Sölu lokið"
     }
   ],
   "counts": {
     "active": 39,
-    "addedEvents": 195,
+    "addedEvents": 196,
     "changedEvents": 35,
-    "events": 362,
-    "finished": 24,
+    "events": 363,
+    "finished": 25,
     "listings": 175,
-    "removed": 112,
+    "removed": 111,
     "removedEvents": 132,
-    "sourcePresent": 63
+    "sourcePresent": 64
   },
   "database": {
     "filename": "uppbod-history.sqlite",
     "schemaVersion": 2,
-    "sha256": "ba5a1884e4f7a41cf2be2424cbc4da188233cfa3245282918afa873572b114b8",
+    "sha256": "b86c6c26dc6b72d24901c9d5afc2e2a9da0e87b9f9974acd4468e72c4d2f308c",
     "sizeBytes": 581632
   },
-  "generatedAt": "2026-10-02T02:19:46.958000Z",
+  "generatedAt": "2026-10-02T15:06:09.447000Z",
   "version": 2
 }
