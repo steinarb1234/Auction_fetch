@@ -1,7 +1,7 @@
 {
   "auctionTypes": [
     {
-      "eventCount": 248,
+      "eventCount": 255,
       "name": "Byrjun uppboðs"
     },
     {
@@ -13,27 +13,27 @@
       "name": "Lausafjáruppboð"
     },
     {
-      "eventCount": 51,
+      "eventCount": 53,
       "name": "Sölu lokið"
     }
   ],
   "counts": {
-    "active": 22,
+    "active": 14,
     "addedEvents": 203,
-    "changedEvents": 40,
-    "events": 398,
+    "changedEvents": 41,
+    "events": 407,
     "finished": 26,
     "listings": 177,
-    "removed": 129,
-    "removedEvents": 155,
-    "sourcePresent": 48
+    "removed": 137,
+    "removedEvents": 163,
+    "sourcePresent": 40
   },
   "database": {
     "filename": "uppbod-history.sqlite",
     "schemaVersion": 2,
-    "sha256": "1d27fff086242f13ffe9ceb708aaa4e764c5511431cfc4014e2025e5c0560de6",
-    "sizeBytes": 614400
+    "sha256": "ecd560760abf7c08ccb61ecc9b39ba36f64e2ba56ee3bf3cd4c47273159d6740",
+    "sizeBytes": 618496
   },
-  "generatedAt": "2026-10-07T00:38:57.767000Z",
+  "generatedAt": "2026-10-07T13:56:42.417000Z",
   "version": 2
 }
