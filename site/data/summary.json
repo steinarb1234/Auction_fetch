@@ -1,11 +1,11 @@
 {
   "auctionTypes": [
     {
-      "eventCount": 294,
+      "eventCount": 295,
       "name": "Byrjun uppboðs"
     },
     {
-      "eventCount": 66,
+      "eventCount": 68,
       "name": "Framhald uppboðs"
     },
     {
@@ -18,22 +18,22 @@
     }
   ],
   "counts": {
-    "active": 44,
+    "active": 42,
     "addedEvents": 246,
-    "changedEvents": 41,
-    "events": 464,
+    "changedEvents": 42,
+    "events": 467,
     "finished": 25,
     "listings": 205,
-    "removed": 136,
-    "removedEvents": 177,
-    "sourcePresent": 69
+    "removed": 138,
+    "removedEvents": 179,
+    "sourcePresent": 67
   },
   "database": {
     "filename": "uppbod-history.sqlite",
     "schemaVersion": 2,
-    "sha256": "016df6b0cd04becff46d5d1f253434dfbb6ae9f9f4015bdface6976e0b59a41b",
-    "sizeBytes": 708608
+    "sha256": "4ef1a01f0901d7b16086c0b7f8b181b97a81a8ed8448fd12cc0a7da756505bc1",
+    "sizeBytes": 712704
   },
-  "generatedAt": "2026-10-13T08:26:17.317000Z",
+  "generatedAt": "2026-10-13T16:24:33.590000Z",
   "version": 2
 }
