@@ -5,7 +5,7 @@
       "name": "Byrjun uppboðs"
     },
     {
-      "eventCount": 163,
+      "eventCount": 167,
       "name": "Framhald uppboðs"
     },
     {
@@ -18,22 +18,22 @@
     }
   ],
   "counts": {
-    "active": 11,
-    "addedEvents": 520,
+    "active": 9,
+    "addedEvents": 521,
     "changedEvents": 73,
-    "events": 1067,
+    "events": 1071,
     "finished": 35,
     "listings": 385,
-    "removed": 339,
-    "removedEvents": 474,
-    "sourcePresent": 46
+    "removed": 341,
+    "removedEvents": 477,
+    "sourcePresent": 44
   },
   "database": {
     "filename": "uppbod-history.sqlite",
     "schemaVersion": 2,
-    "sha256": "9a15890e942df9f5f60190562864f05ca57c245aefe01cf722cd6886b728b008",
-    "sizeBytes": 1404928
+    "sha256": "4e64dda4be9b29f3f71975ecea8af76b86283ff21e2e01200728b6f41bd16612",
+    "sizeBytes": 1409024
   },
-  "generatedAt": "2026-11-24T04:53:46.593000Z",
+  "generatedAt": "2026-11-25T00:10:22.586000Z",
   "version": 2
 }
